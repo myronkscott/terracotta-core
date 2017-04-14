@@ -109,6 +109,7 @@ public class ActiveToPassiveReplication implements PassiveReplicationBroker, Gro
     passives.forEach(i -> {
       if (prime(i)) {
         passiveNodes.add(i);
+        logger.info("PASSIVE added " + i + " " + passiveNodes);
       }
     });
   }
@@ -129,6 +130,7 @@ public class ActiveToPassiveReplication implements PassiveReplicationBroker, Gro
     Assert.assertTrue(activated);
     if (prime(newNode)) {
       passiveNodes.add(newNode);
+      logger.info("PASSIVE added " + newNode + " " + passiveNodes);
     } else {
       Assert.assertTrue("passive node unable to prime and not in the list of passives", passiveNodes.contains(newNode));
     }
@@ -258,6 +260,7 @@ public class ActiveToPassiveReplication implements PassiveReplicationBroker, Gro
 // first remove it from the list of passive nodes so that anything sending new messages 
 // will have to remove it from the list of nodes to send to
     passiveNodes.remove(nodeID);
+      logger.info("PASSIVE removed " + nodeID + " " + passiveNodes);
 //  acknowledge all the messages for this node because it is gone, this may result in 
 //  a double ack locally but that is ok.  acknowledge is loose and can tolerate it. 
     if (activated) {
