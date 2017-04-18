@@ -306,7 +306,7 @@ public class TCWorkerCommManagerTest extends TCTestCase {
     // comms manager with 3 worker comms
     CommunicationsManager commsMgr = new CommunicationsManagerImpl("TestCommsMgr", new NullMessageMonitor(),
                                                                    new TCMessageRouterImpl(),
-                                                                   getNetworkStackHarnessFactory(true),
+                                                                   getNetworkStackHarnessFactory(true), null, 
                                                                    new NullConnectionPolicy(), 3,
                                                                    new HealthCheckerConfigImpl(TCPropertiesImpl
                                                                        .getProperties()

@@ -71,7 +71,11 @@ public class WireProtocolAdaptorImpl extends AbstractTCProtocolAdaptor implement
         msg.getWireProtocolHeader().recycle();
         // Individual messages are recycled on top layers only.
       } else {
-        sink.putMessage(msg);
+        try {
+          sink.putMessage(msg);
+        } catch (Throwable t) {
+          throw new TCProtocolException(t);
+        }
       }
     }
     return;

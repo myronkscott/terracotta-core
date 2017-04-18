@@ -91,6 +91,7 @@ import com.tc.l2.msg.PlatformInfoRequest;
 import com.tc.l2.msg.ReplicationMessage;
 import com.tc.l2.msg.ReplicationMessageAck;
 import com.tc.l2.msg.SyncReplicationActivity;
+import com.tc.l2.net.BasicConnectionManager;
 import com.tc.l2.operatorevent.OperatorEventsPassiveServerConnectionListener;
 import com.tc.l2.state.StateChangeListener;
 import com.tc.l2.state.StateManager;
@@ -548,6 +549,7 @@ public class DistributedObjectServer implements TCDumper, LockInfoDumpHandler, S
     
     this.communicationsManager = new CommunicationsManagerImpl(CommunicationsManager.COMMSMGR_SERVER, mm,
                                                                messageRouter, networkStackHarnessFactory,
+                                                               new BasicConnectionManager(),
                                                                this.connectionPolicy, commWorkerThreadCount,
                                                                new HealthCheckerConfigImpl(tcProperties
                                                                    .getPropertiesFor(TCPropertiesConsts.L2_L1_HEALTH_CHECK_CATEGORY), "TSA Server"),

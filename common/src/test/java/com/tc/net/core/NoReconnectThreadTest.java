@@ -106,7 +106,7 @@ public class NoReconnectThreadTest extends TCTestCase implements ChannelEventLis
     CommunicationsManager serverCommsMgr = new CommunicationsManagerImpl("TestCommsMgr-Server",
                                                                          new NullMessageMonitor(),
                                                                          new TCMessageRouterImpl(),
-                                                                         getNetworkStackHarnessFactory(false),
+                                                                         getNetworkStackHarnessFactory(false), null, 
                                                                          new NullConnectionPolicy(), 3,
                                                                          new HealthCheckerConfigImpl(TCPropertiesImpl
                                                                              .getProperties()
@@ -170,7 +170,7 @@ public class NoReconnectThreadTest extends TCTestCase implements ChannelEventLis
     CommunicationsManager serverCommsMgr = new CommunicationsManagerImpl("TestCommsMgr-Server",
                                                                          new NullMessageMonitor(),
                                                                          new TCMessageRouterImpl(),
-                                                                         getNetworkStackHarnessFactory(true),
+                                                                         getNetworkStackHarnessFactory(true), null, 
                                                                          new NullConnectionPolicy(), 3,
                                                                          new HealthCheckerConfigImpl(TCPropertiesImpl
                                                                              .getProperties()

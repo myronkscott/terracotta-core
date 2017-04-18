@@ -149,13 +149,13 @@ public class CommunicationsManagerImpl implements CommunicationsManager {
   }
 
   public CommunicationsManagerImpl(String commsMgrName, MessageMonitor monitor, TCMessageRouter messageRouter,
-                                   NetworkStackHarnessFactory stackHarnessFactory, ConnectionPolicy connectionPolicy,
+                                   NetworkStackHarnessFactory stackHarnessFactory, TCConnectionManager connMgr, ConnectionPolicy connectionPolicy,
                                    int workerCommCount, HealthCheckerConfig config, ServerID serverID,
                                    TransportHandshakeErrorHandler transportHandshakeErrorHandler,
                                    Map<TCMessageType, Class<? extends TCMessage>> messageTypeClassMapping,
                                    Map<TCMessageType, GeneratedMessageFactory> messageTypeFactoryMapping,
                                    TCSecurityManager securityManager) {
-    this(commsMgrName, monitor, messageRouter, stackHarnessFactory, null, connectionPolicy, workerCommCount, config,
+    this(commsMgrName, monitor, messageRouter, stackHarnessFactory, connMgr, connectionPolicy, workerCommCount, config,
          transportHandshakeErrorHandler, messageTypeClassMapping, ReconnectionRejectedHandlerL2.SINGLETON,
          securityManager, null);
     this.serverID = serverID;

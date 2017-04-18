@@ -240,7 +240,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
 
     communicationsManager = new CommunicationsManagerImpl(CommunicationsManager.COMMSMGR_GROUPS,
                                                           new NullMessageMonitor(), messageRouter,
-                                                          networkStackHarnessFactory, this.connectionPolicy,
+                                                          networkStackHarnessFactory, null, this.connectionPolicy, 
                                                           L2Utils.getOptimalCommWorkerThreads(),
                                                           new HealthCheckerConfigImpl(tcProperties
                                                               .getPropertiesFor(TCPropertiesConsts.L2_L2_HEALTH_CHECK_CATEGORY), "TCGroupManager"),
