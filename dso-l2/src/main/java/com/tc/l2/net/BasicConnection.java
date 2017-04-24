@@ -30,12 +30,10 @@ public class BasicConnection implements TCConnection {
   private final long connect = System.currentTimeMillis();
   private final Function<TCConnection, Socket> closeRunnable;
   private final Consumer<WireProtocolMessage> write;
-  private final TCProtocolAdaptor protocol;
   private Socket src;
   private boolean established = false;
 
-  public BasicConnection(TCProtocolAdaptor protocol, Socket src, Consumer<WireProtocolMessage> write, Function<TCConnection, Socket> close) {
-    this.protocol = protocol;
+  public BasicConnection(Socket src, Consumer<WireProtocolMessage> write, Function<TCConnection, Socket> close) {
     this.src = src;
     this.write = write;
     this.closeRunnable = close;

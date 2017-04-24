@@ -245,11 +245,11 @@ public class TCByteBufferFactory {
 
   public static void returnBuffer(TCByteBuffer buf) {
     if (disablePooling) { return; }
-
+    
     if (buf.capacity() == FIXED_BUFFER_SIZE) {
       BufferPool bufferPool = buf.getBufferPool();
-      buf.commit();
-
+      buf.clear().commit();
+      
       if (bufferPool != null) {
         try {
           bufferPool.offer(buf);

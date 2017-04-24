@@ -16,20 +16,25 @@ import com.tc.net.protocol.transport.WireProtocolMessage;
 import com.tc.util.Assert;
 import com.tc.util.TCTimeoutException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.net.SocketAddress;
+import java.net.StandardSocketOptions;
+import java.nio.ByteBuffer;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.net.ServerSocketFactory;
 
 /**
@@ -39,7 +44,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
   
   private final InetAddress bind;
   private final int port;
-  private final ServerSocket server;
+  private final ServerSocketChannel server;
   private final Thread spinner;
   private boolean running = true;
   private boolean finished = false;
@@ -50,8 +55,8 @@ public class BasicListenerImpl implements TCListener, Runnable {
   public BasicListenerImpl(ProtocolAdaptorFactory protocol, ServerSocketFactory factory, InetAddress bind, int port) throws IOException {
     this.bind = bind;
     this.port = port;
-    this.server = factory.createServerSocket();
-    this.server.setReuseAddress(true);
+    this.server = ServerSocketChannel.open();
+    this.server.setOption(StandardSocketOptions.SO_REUSEADDR, true);
     SocketAddress address = new InetSocketAddress(bind, port);
     this.server.bind(address);
     this.spinner = new Thread(this);
@@ -67,29 +72,17 @@ public class BasicListenerImpl implements TCListener, Runnable {
   public void run() {
     try {
       while (running) {
-        Socket socket = this.server.accept();
-        InputStream is = socket.getInputStream();
-        OutputStream out = socket.getOutputStream();
+        SocketChannel channel = this.server.accept();
+        channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
         TCProtocolAdaptor adaptor = this.factory.getInstance();
-        BasicConnection connection = new BasicConnection(adaptor, socket, (msg)->write(out,msg), (conn)->{connections.remove(conn);return socket;});
+        BasicConnection connection = new BasicConnection(channel.socket(), (msg)->write(channel,msg), (conn)->{connections.remove(conn);return channel.socket();});
         connections.add(connection);
         readerExec.submit(() -> {
           try {
-            while (!socket.isInputShutdown()) {
+            while (channel.isOpen() && !connection.isClosed()) {
               int amount = 0;
               TCByteBuffer[] buffers = adaptor.getReadBuffers();
-              for (TCByteBuffer buf : buffers) {
-                byte[] read = buf.array();
-                while (buf.hasRemaining()) {
-                  int count = is.read(read, buf.arrayOffset() + buf.position(), buf.remaining());
-                  if (count >= 0) {
-                    buf.put(read, buf.arrayOffset() + buf.position(), count);
-                    amount += count;
-                  } else {
-                    break;
-                  }
-                }
-              }
+              channel.read(extractNio(buffers));
               adaptor.addReadData(connection, buffers, amount);
             }            
           } catch (IOException ioe) {
@@ -103,7 +96,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
         });
       }
     } catch (IOException ioe) {
-      
+      ioe.printStackTrace();
     }
     synchronized (this) {
       finished = true;
@@ -111,23 +104,29 @@ public class BasicListenerImpl implements TCListener, Runnable {
     }
   }
   
-  public void write(OutputStream out, WireProtocolMessage message) {
-    Semaphore latch = new Semaphore(0);
-    this.readerExec.submit(()->{
+  private ByteBuffer[] extractNio(TCByteBuffer[] buffers) {
+    ByteBuffer[] send = new ByteBuffer[buffers.length];
+    for (int x=0;x<buffers.length;x++) {
+      send[x] = buffers[x].getNioBuffer();
+    }
+    return send;
+  }
+  
+  public void write(SocketChannel out, WireProtocolMessage message) {
+//    Semaphore latch = new Semaphore(0);
+//    this.writerExec.submit(()->{
       try {
         TCByteBuffer[] data = message.getEntireMessageData();
-        for (TCByteBuffer buf : data) {
-          out.write(buf.array(), buf.arrayOffset() + buf.position(), buf.remaining());
-        }
-        latch.release();
-        out.flush();
+        out.write(extractNio(data));
+//        latch.release();
+//        out.flush();
       } catch (IOException ioe) {
         ioe.printStackTrace();
       } catch (Throwable t) {
         t.printStackTrace();
       }
-    });
-    latch.acquireUninterruptibly();
+//    });
+//    latch.acquireUninterruptibly();
   } 
 
   @Override

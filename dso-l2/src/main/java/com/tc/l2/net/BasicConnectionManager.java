@@ -23,7 +23,7 @@ public class BasicConnectionManager implements TCConnectionManager {
 
   @Override
   public TCConnection createConnection(TCProtocolAdaptor adaptor) {
-    return new BasicConnection(adaptor, null, (t)->{}, (conn)->null);
+    return new BasicConnection(null, (t)->{}, (conn)->null);
   }
 
   @Override

@@ -396,7 +396,6 @@ public class TCByteBufferImpl implements TCByteBuffer, BufferPool {
 
   @Override
   public TCByteBuffer reInit() {
-    clear();
     return this;
   }
 
