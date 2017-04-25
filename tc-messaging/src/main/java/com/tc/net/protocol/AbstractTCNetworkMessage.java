@@ -22,6 +22,7 @@ import com.tc.bytes.TCByteBuffer;
 import com.tc.exception.TCInternalError;
 import com.tc.logging.TCLogger;
 import com.tc.logging.TCLogging;
+import com.tc.net.protocol.tcm.TCMessageHeader;
 import com.tc.util.Assert;
 import com.tc.util.HexDump;
 import com.tc.util.StringUtil;
@@ -279,7 +280,7 @@ public class AbstractTCNetworkMessage implements TCNetworkMessage {
   public void recycle() {
     if (entireMessageData != null) {
       int i = 0;
-      if (entireMessageData.length > 1 && entireMessageData[0].array() == entireMessageData[1].array()) {
+      if (entireMessageData.length > 1 && entireMessageData[0].limit() == TCMessageHeader.HEADER_LENGTH) {
         // This is done as TCMessageParser creates a dupilcate of the first buffer for the header.
         // @see TCMessageParser.parseMessage()
         // Can be done more elegantly, but it is done like this keeping performance in mind.

@@ -580,7 +580,9 @@ public class TCByteBufferImpl implements TCByteBuffer, BufferPool {
 
   @Override
   public void commit() {
-    if (state == COMMITTED) { throw new AssertionError("Already commited"); }
+    if (state == COMMITTED) { 
+      throw new AssertionError("Already commited"); 
+    }
     state = COMMITTED;
   }
 

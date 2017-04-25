@@ -110,14 +110,17 @@ public class ProcessTransactionHandler implements ReconnectListener {
     @Override
     public void handleEvent(TCMessage context) throws EventHandlerException {
       NodeID destinationID = context.getDestinationNodeID();
-      invokeReturn.remove((ClientID)destinationID, context);
       if(context instanceof VoltronEntityMultiResponse) {
-        VoltronEntityMultiResponse voltronEntityMultiResponse = (com.tc.entity.VoltronEntityMultiResponse) context;
+        VoltronEntityMultiResponseImpl voltronEntityMultiResponse = (com.tc.entity.VoltronEntityMultiResponseImpl) context;
         voltronEntityMultiResponse.stopAdding();
+        voltronEntityMultiResponse.setSentCallback(()->{
+          invokeReturn.remove((ClientID)destinationID, context);
+        });
         for (TransactionID transactionID : voltronEntityMultiResponse.getReceivedTransactions()) {
           waitForTransactionOrderPersistenceFuture(transactionID);
         }
       } else if(context instanceof VoltronEntityAppliedResponse) {
+        invokeReturn.remove((ClientID)destinationID, context);
         waitForTransactionOrderPersistenceFuture(((VoltronEntityAppliedResponse)context).getTransactionID());
       } else {
         Assert.fail("Unexpected message type: " + context.getClass());

@@ -23,18 +23,14 @@ import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import javax.net.ServerSocketFactory;
 
 /**
@@ -46,11 +42,10 @@ public class BasicListenerImpl implements TCListener, Runnable {
   private final int port;
   private final ServerSocketChannel server;
   private final Thread spinner;
-  private boolean running = true;
-  private boolean finished = false;
   private final ProtocolAdaptorFactory factory;
   private final ExecutorService readerExec = Executors.newCachedThreadPool();
   private final Set<BasicConnection> connections = Collections.synchronizedSet(new LinkedHashSet<>());
+  private final List<TCListenerEventListener> listeners = new LinkedList<>();
 
   public BasicListenerImpl(ProtocolAdaptorFactory protocol, ServerSocketFactory factory, InetAddress bind, int port) throws IOException {
     this.bind = bind;
@@ -71,7 +66,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
   
   public void run() {
     try {
-      while (running) {
+      while (this.server.isOpen()) {
         SocketChannel channel = this.server.accept();
         channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
         TCProtocolAdaptor adaptor = this.factory.getInstance();
@@ -79,11 +74,19 @@ public class BasicListenerImpl implements TCListener, Runnable {
         connections.add(connection);
         readerExec.submit(() -> {
           try {
-            while (channel.isOpen() && !connection.isClosed()) {
-              int amount = 0;
+            while (!connection.isClosed()) {
+              long amount = 0;
               TCByteBuffer[] buffers = adaptor.getReadBuffers();
-              channel.read(extractNio(buffers));
-              adaptor.addReadData(connection, buffers, amount);
+              amount = channel.read(extractNio(buffers));
+              if (amount >= 0) {
+                if (amount > Integer.MAX_VALUE) {
+                  throw new AssertionError("overflow long");
+                }
+                adaptor.addReadData(connection, buffers, (int)amount);
+                connection.marckReceived();
+              } else {
+                connection.close(0);
+              }
             }            
           } catch (IOException ioe) {
             ioe.printStackTrace();
@@ -98,10 +101,6 @@ public class BasicListenerImpl implements TCListener, Runnable {
     } catch (IOException ioe) {
       ioe.printStackTrace();
     }
-    synchronized (this) {
-      finished = true;
-      this.notifyAll();
-    }
   }
   
   private ByteBuffer[] extractNio(TCByteBuffer[] buffers) {
@@ -114,10 +113,11 @@ public class BasicListenerImpl implements TCListener, Runnable {
   
   public void write(SocketChannel out, WireProtocolMessage message) {
 //    Semaphore latch = new Semaphore(0);
-//    this.writerExec.submit(()->{
+    this.readerExec.submit(()->{
       try {
         TCByteBuffer[] data = message.getEntireMessageData();
         out.write(extractNio(data));
+        message.wasSent();
 //        latch.release();
 //        out.flush();
       } catch (IOException ioe) {
@@ -125,7 +125,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
       } catch (Throwable t) {
         t.printStackTrace();
       }
-//    });
+    });
 //    latch.acquireUninterruptibly();
   } 
 
@@ -139,15 +139,11 @@ public class BasicListenerImpl implements TCListener, Runnable {
   }
 
   @Override
-  public synchronized void stop(long timeout) throws TCTimeoutException {
-    this.running = false;
-    this.spinner.interrupt();
+  public void stop(long timeout) throws TCTimeoutException {
     try {
       this.server.close();
-      while (!this.finished) {
-        this.wait(timeout);
-      }
-      if (!this.finished) {
+      readerExec.shutdown();
+      if (!readerExec.awaitTermination(timeout, TimeUnit.MILLISECONDS)) {
         throw new TCTimeoutException(timeout);
       }
     } catch (InterruptedException ie) {
@@ -176,12 +172,12 @@ public class BasicListenerImpl implements TCListener, Runnable {
 
   @Override
   public void addEventListener(TCListenerEventListener lsnr) {
-
+    throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
   }
 
   @Override
   public void removeEventListener(TCListenerEventListener lsnr) {
-
+    throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
   }
 
   @Override

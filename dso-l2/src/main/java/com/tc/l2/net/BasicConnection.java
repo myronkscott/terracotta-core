@@ -7,9 +7,9 @@ package com.tc.l2.net;
 
 import com.tc.net.TCSocketAddress;
 import com.tc.net.core.TCConnection;
+import com.tc.net.core.event.TCConnectionEvent;
 import com.tc.net.core.event.TCConnectionEventListener;
 import com.tc.net.protocol.TCNetworkMessage;
-import com.tc.net.protocol.TCProtocolAdaptor;
 import com.tc.net.protocol.transport.WireProtocolHeader;
 import com.tc.net.protocol.transport.WireProtocolMessage;
 import com.tc.net.protocol.transport.WireProtocolMessageImpl;
@@ -17,7 +17,8 @@ import com.tc.util.Assert;
 import com.tc.util.TCTimeoutException;
 import java.io.IOException;
 import java.net.Socket;
-import java.util.concurrent.Callable;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -28,10 +29,15 @@ import java.util.function.Function;
 public class BasicConnection implements TCConnection {
   
   private final long connect = System.currentTimeMillis();
+  private volatile long last = System.currentTimeMillis();
+  private volatile long received = System.currentTimeMillis();
+  
   private final Function<TCConnection, Socket> closeRunnable;
   private final Consumer<WireProtocolMessage> write;
   private Socket src;
   private boolean established = false;
+  private boolean connected = true;
+  private List<TCConnectionEventListener> listeners = new LinkedList<>();
 
   public BasicConnection(Socket src, Consumer<WireProtocolMessage> write, Function<TCConnection, Socket> close) {
     this.src = src;
@@ -46,22 +52,26 @@ public class BasicConnection implements TCConnection {
 
   @Override
   public long getIdleTime() {
-    return 0;
+    return System.currentTimeMillis() - last;
   }
 
   @Override
   public long getIdleReceiveTime() {
-    return 0;
+    return System.currentTimeMillis() - received;
+  }
+  
+  void marckReceived() {
+    received = System.currentTimeMillis();
   }
 
   @Override
-  public void addListener(TCConnectionEventListener listener) {
-
+  public synchronized void addListener(TCConnectionEventListener listener) {
+    listeners.add(listener);
   }
 
   @Override
-  public void removeListener(TCConnectionEventListener listener) {
-
+  public synchronized void removeListener(TCConnectionEventListener listener) {
+    listeners.remove(listener);
   }
 
   @Override
@@ -70,11 +80,15 @@ public class BasicConnection implements TCConnection {
   }
 
   @Override
-  public Socket detach() throws IOException {
+  public synchronized Socket detach() throws IOException {
     try {
+      this.established = false;
       return this.closeRunnable.apply(this);
     } catch (Exception e) {
       return null;
+    } finally {
+      this.established = false;
+      this.connected = false;
     }
   }
 
@@ -85,7 +99,14 @@ public class BasicConnection implements TCConnection {
       return true;
     } catch (IOException ioe) {
       return false;
+    } finally {
+      fireClosed();
     }
+  }
+  
+  private void fireClosed() {
+    TCConnectionEvent event = new TCConnectionEvent(this);
+    listeners.forEach(l->l.closeEvent(event));
   }
 
   @Override
@@ -100,13 +121,13 @@ public class BasicConnection implements TCConnection {
   }
 
   @Override
-  public boolean isConnected() {
-    return true;
+  public synchronized boolean isConnected() {
+    return this.connected;
   }
 
   @Override
-  public boolean isClosed() {
-    return false;
+  public synchronized boolean isClosed() {
+    return !this.connected;
   }
 
   @Override
@@ -125,12 +146,12 @@ public class BasicConnection implements TCConnection {
   }
 
   @Override
-  public void setTransportEstablished() {
+  public synchronized void setTransportEstablished() {
     established = true;
   }
 
   @Override
-  public boolean isTransportEstablished() {
+  public synchronized boolean isTransportEstablished() {
     return established;
   }
 
@@ -141,6 +162,7 @@ public class BasicConnection implements TCConnection {
 
   @Override
   public void putMessage(TCNetworkMessage message) {
+    last = System.currentTimeMillis();
     if (message instanceof WireProtocolMessage) {
       this.write.accept(finalizeWireProtocolMessage((WireProtocolMessage)message, 1));
     } else {

@@ -48,6 +48,7 @@ public class VoltronEntityMultiResponseImpl extends DSOMessageBase implements Vo
   private Map<TransactionID, byte[]> results;
 
   private boolean stopAdding;
+  private VoltronEntityMultiResponseImpl next;
   
   public VoltronEntityMultiResponseImpl(SessionID sessionID, MessageMonitor monitor, TCByteBufferOutputStream out, MessageChannel channel, TCMessageType type) {
     super(sessionID, monitor, out, channel, type);
@@ -55,6 +56,17 @@ public class VoltronEntityMultiResponseImpl extends DSOMessageBase implements Vo
 
   public VoltronEntityMultiResponseImpl(SessionID sessionID, MessageMonitor monitor, MessageChannel channel, TCMessageHeader header, TCByteBuffer[] data) {
     super(sessionID, monitor, channel, header, data);
+  }
+  
+  public synchronized VoltronEntityMultiResponse next() {
+    return next;
+  }
+  
+  private VoltronEntityMultiResponseImpl createNext() {
+    if (next == null) {
+      next = (VoltronEntityMultiResponseImpl)this.getChannel().createMessage(TCMessageType.VOLTRON_ENTITY_MULTI_RESPONSE);
+    }
+    return next;
   }
   
   @Override
@@ -82,8 +94,10 @@ public class VoltronEntityMultiResponseImpl extends DSOMessageBase implements Vo
       }
       receivedIDs.add(tid);
       return true;
+    } else {
+//      createNext().addReceived(tid);
+      return false;
     }
-    return false;
   }
   
   @Override
@@ -94,8 +108,10 @@ public class VoltronEntityMultiResponseImpl extends DSOMessageBase implements Vo
       }
       retiredIDs.add(tid);
       return true;
+    } else {
+//      createNext().addRetired(tid);
+      return false;
     }
-    return false;
   }
 
   @Override
@@ -106,8 +122,10 @@ public class VoltronEntityMultiResponseImpl extends DSOMessageBase implements Vo
       }
       results.put(tid, result);
       return true;
+    } else {
+//      createNext().addResult(tid, result);
+      return false;
     }
-    return false;
   }
   
   @Override
