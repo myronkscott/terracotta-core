@@ -113,7 +113,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
   
   public void write(SocketChannel out, WireProtocolMessage message) {
 //    Semaphore latch = new Semaphore(0);
-    this.readerExec.submit(()->{
+//    this.readerExec.submit(()->{
       try {
         TCByteBuffer[] data = message.getEntireMessageData();
         out.write(extractNio(data));
@@ -125,7 +125,7 @@ public class BasicListenerImpl implements TCListener, Runnable {
       } catch (Throwable t) {
         t.printStackTrace();
       }
-    });
+//    });
 //    latch.acquireUninterruptibly();
   } 
 

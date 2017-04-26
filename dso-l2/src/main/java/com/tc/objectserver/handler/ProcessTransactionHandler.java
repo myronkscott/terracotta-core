@@ -27,8 +27,8 @@ import com.tc.entity.ResendVoltronEntityMessage;
 import com.tc.entity.VoltronEntityAppliedResponse;
 import com.tc.entity.VoltronEntityMessage;
 import com.tc.entity.VoltronEntityMultiResponse;
+import com.tc.entity.VoltronEntityMultiResponseImpl;
 import com.tc.exception.VoltronEntityUserExceptionWrapper;
-import com.tc.exception.VoltronWrapperException;
 import com.tc.logging.TCLogger;
 import com.tc.logging.TCLogging;
 import com.tc.net.ClientID;
@@ -73,7 +73,6 @@ import org.terracotta.entity.EntityUserException;
 import org.terracotta.entity.MessageCodecException;
 import org.terracotta.exception.EntityException;
 import org.terracotta.exception.EntityNotFoundException;
-import org.terracotta.exception.EntityServerUncaughtException;
 
 
 public class ProcessTransactionHandler implements ReconnectListener {
@@ -110,17 +109,16 @@ public class ProcessTransactionHandler implements ReconnectListener {
     @Override
     public void handleEvent(TCMessage context) throws EventHandlerException {
       NodeID destinationID = context.getDestinationNodeID();
+      invokeReturn.remove((ClientID)destinationID, context);
       if(context instanceof VoltronEntityMultiResponse) {
         VoltronEntityMultiResponseImpl voltronEntityMultiResponse = (com.tc.entity.VoltronEntityMultiResponseImpl) context;
         voltronEntityMultiResponse.stopAdding();
         voltronEntityMultiResponse.setSentCallback(()->{
-          invokeReturn.remove((ClientID)destinationID, context);
         });
         for (TransactionID transactionID : voltronEntityMultiResponse.getReceivedTransactions()) {
           waitForTransactionOrderPersistenceFuture(transactionID);
         }
       } else if(context instanceof VoltronEntityAppliedResponse) {
-        invokeReturn.remove((ClientID)destinationID, context);
         waitForTransactionOrderPersistenceFuture(((VoltronEntityAppliedResponse)context).getTransactionID());
       } else {
         Assert.fail("Unexpected message type: " + context.getClass());
