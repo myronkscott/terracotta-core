@@ -5,10 +5,13 @@ import org.slf4j.Logger;
 import com.tc.async.api.EventHandlerException;
 import com.tc.async.api.Sink;
 import com.tc.async.api.Source;
+import com.tc.exception.TCRuntimeException;
 import com.tc.logging.TCLoggerProvider;
 import com.tc.util.Assert;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author cschanck
@@ -73,21 +76,91 @@ public abstract class AbstractStageQueueImpl<EC> implements StageQueue<EC> {
     return queueState;
   }
   
-  interface SourceQueue extends Source {
-    int clear();
+  public static abstract class SourceQueue implements Source {
+    private final BlockingQueue<Event> queue;
+    private volatile boolean spinNext = true;
+    
+    public SourceQueue(BlockingQueue<Event> queue) {
+      this.queue = queue;
+    }
+    
+    // XXX: poor man's clear.
+    public int clear() {
+      int cleared = 0;
+      try {
+        while (poll(0) != null) {
+          cleared++;
+        }
+        return cleared;
+      } catch (InterruptedException e) {
+        throw new TCRuntimeException(e);
+      }
+    }
 
     @Override
-    boolean isEmpty();
+    public boolean isEmpty() {
+      return this.queue.isEmpty();
+    }
+
+    public void put(Event context) throws InterruptedException {
+      this.queue.put(context);
+    }
 
     @Override
-    Event poll(long timeout) throws InterruptedException;
-
-    void put(Event context) throws InterruptedException;
-
-    int size();
-
+    public int size() {
+      return this.queue.size();
+    }
+    
     @Override
-    String getSourceName();
+    public Event poll(long timeout) throws InterruptedException {
+      if (timeout == 0) {
+        return this.queue.poll();
+      }
+      Event e = null;
+      long spin = timeout / 10;
+      if (spinNext && spin > 20) {
+        e = spinPoll(TimeUnit.MILLISECONDS.toNanos(spin));
+      }
+      if (e == null) {
+        e = this.queue.poll(timeout - spin, TimeUnit.MILLISECONDS);
+      }
+      spinNext = (e != null);
+      return e;
+    }
+
+    private Event spinPoll(long timeInNanos) {
+      long nano = System.nanoTime();
+      long sleep = 1L;
+      long left = timeInNanos;
+      boolean interrupted = false;
+      int spinCount = 0;
+      try {
+        while (left > 0) {
+          Event e = queue.poll();
+          if (e != null) {
+            return e;
+          } else if (spinCount < 100) {
+            spinCount += 1;
+          } else {
+            try {
+              left = timeInNanos - (System.nanoTime() - nano);
+              if (left > 0) {
+                long rest = Math.min(left, sleep);
+                Thread.sleep(rest / TimeUnit.MILLISECONDS.toNanos(1), (int)(rest % TimeUnit.MILLISECONDS.toNanos(1)));
+                sleep = sleep << 1;
+              }
+            } catch (InterruptedException i) {
+              interrupted = true;
+            }
+          }
+        }
+      } finally {
+        if (interrupted) {
+          Thread.currentThread().interrupt();
+        }
+      }
+      return null;
+    }
   }
 
   class HandledEvent<C> implements Event {

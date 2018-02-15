@@ -19,17 +19,12 @@
 package com.tc.async.impl;
 
 
-import com.tc.async.api.MultiThreadedEventContext;
 import com.tc.async.api.Source;
-import com.tc.exception.TCRuntimeException;
 import com.tc.logging.TCLoggerProvider;
 import com.tc.util.Assert;
 import com.tc.util.concurrent.QueueFactory;
 
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
-
-import static com.tc.async.impl.AbstractStageQueueImpl.SourceQueue;
 
 /**
  * This StageQueueImpl represents the sink and gives a handle to the source. We are internally just using a queue
@@ -60,8 +55,6 @@ public class SingletonStageQueueImpl<EC> extends AbstractStageQueueImpl<EC> {
   private SourceQueueImpl createWorkerQueue(QueueFactory queueFactory, Class<EC> type, 
                                                                 int queueSize,
                                                                 String stage) {
-    BlockingQueue<Event> q = null;
-
     Assert.eval(queueSize > 0);
 
     return new SourceQueueImpl(queueFactory.createInstance(type, queueSize));
@@ -122,52 +115,15 @@ public class SingletonStageQueueImpl<EC> extends AbstractStageQueueImpl<EC> {
     this.logger.info("Cleared " + clearCount);
   }
 
-  private final class SourceQueueImpl implements SourceQueue {
-
-    private final BlockingQueue<Event> queue;
+  private final class SourceQueueImpl extends SourceQueue {
 
     public SourceQueueImpl(BlockingQueue<Event> queue) {
-      this.queue = queue;
+      super(queue);
     }
 
     @Override
     public String toString() {
-      return "SourceQueueImpl{Singleton size=" + queue.size() + '}';
-    }
-
-    // XXX: poor man's clear.
-    @Override
-    public int clear() {
-      int cleared = 0;
-      try {
-        while (poll(0) != null) {
-          cleared++;
-        }
-        return cleared;
-      } catch (InterruptedException e) {
-        throw new TCRuntimeException(e);
-      }
-    }
-
-    @Override
-    public boolean isEmpty() {
-      return this.queue.isEmpty();
-    }
-
-    @Override
-    public Event poll(long timeout) throws InterruptedException {
-      Event rv = (timeout == 0) ? this.queue.poll() : this.queue.poll(timeout, TimeUnit.MILLISECONDS);
-      return rv;
-    }
-
-    @Override
-    public void put(Event context) throws InterruptedException {
-      this.queue.put(context);
-    }
-
-    @Override
-    public int size() {
-      return this.queue.size();
+      return "SourceQueueImpl{Singleton size=" + size() + '}';
     }
 
     @Override

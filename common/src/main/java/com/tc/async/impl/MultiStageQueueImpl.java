@@ -256,21 +256,20 @@ public class MultiStageQueueImpl<EC extends MultiThreadedEventContext> extends A
     this.logger.info("Cleared " + clearCount);
   }
 
-  private static final class MultiSourceQueueImpl implements SourceQueue {
+  private static final class MultiSourceQueueImpl extends SourceQueue {
 
     private final Consumer<Integer> hint;
-    private final BlockingQueue<Event> queue;
     private final int                      sourceIndex;
 
     public MultiSourceQueueImpl(BlockingQueue<Event> queue, Consumer<Integer> hint, int sourceIndex) {
-      this.queue = queue;
+      super(queue);
       this.hint = hint;
       this.sourceIndex = sourceIndex;
     }
 
     @Override
     public String toString() {
-      return "SourceQueueImpl{" + sourceIndex + "size=" + queue.size() + '}';
+      return "SourceQueueImpl{" + sourceIndex + "size=" + size() + '}';
     }
 
     // XXX: poor man's clear.
@@ -288,15 +287,10 @@ public class MultiStageQueueImpl<EC extends MultiThreadedEventContext> extends A
     }
 
     @Override
-    public boolean isEmpty() {
-      return this.queue.isEmpty();
-    }
-
-    @Override
     public Event poll(long timeout) throws InterruptedException {
-      Event rv = this.queue.poll(timeout, TimeUnit.MILLISECONDS);
+      Event rv = super.poll(timeout);
       if (rv != null) {
-        if (queue.isEmpty()) {
+        if (isEmpty()) {
           // set the empty index for shortest queue in hopes of catching it on the first try
           hint.accept(this.sourceIndex);
         }
@@ -304,16 +298,6 @@ public class MultiStageQueueImpl<EC extends MultiThreadedEventContext> extends A
         hint.accept(this.sourceIndex);
       }
       return rv;
-    }
-
-    @Override
-    public void put(Event context) throws InterruptedException {
-      this.queue.put(context);
-    }
-
-    @Override
-    public int size() {
-      return this.queue.size();
     }
 
     @Override
