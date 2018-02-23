@@ -19,16 +19,24 @@
 package com.tc.util.concurrent;
 
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 import com.tc.async.impl.Event;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.LinkedTransferQueue;
+import java.util.concurrent.SynchronousQueue;
 
 public class QueueFactory {
 
   public <E> BlockingQueue<Event> createInstance(Class<E> type) {
-    return new LinkedBlockingQueue<>();
+    return new LinkedTransferQueue<>();
   }
 
   public <E> BlockingQueue<Event> createInstance(Class<E> type, int capacity) {
-    return new LinkedBlockingQueue<>(capacity);
+    if (capacity == 0) {
+      return new SynchronousQueue<>();
+    } else if (capacity < 0 || capacity > 8192) {
+      return new LinkedTransferQueue<>();
+    } else {
+      return new ArrayBlockingQueue<>(capacity);
+    }
   }
 }
