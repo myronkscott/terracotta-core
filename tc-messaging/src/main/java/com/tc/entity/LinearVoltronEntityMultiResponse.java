@@ -41,6 +41,7 @@ public class LinearVoltronEntityMultiResponse extends DSOMessageBase implements 
   
   private final byte OP_ID = 1;
   private final byte DONE_ID = 2;
+  private final static Operation[] OP_MAP = Operation.values();
   
   public enum Operation {
     RECEIVED,
@@ -89,7 +90,7 @@ public class LinearVoltronEntityMultiResponse extends DSOMessageBase implements 
     
     public Op(byte[] raw) {
       ByteBuffer reader = ByteBuffer.wrap(raw);
-      this.type = Operation.values()[reader.getInt()];
+      this.type = OP_MAP[reader.getInt()];
       this.id = reader.getLong();
       this.data = new byte[reader.remaining()];
       reader.get(this.data);
@@ -207,7 +208,7 @@ public class LinearVoltronEntityMultiResponse extends DSOMessageBase implements 
   @Override
   protected boolean hydrateValue(byte name) throws IOException {
     if (name == OP_ID) {
-      Operation type = Operation.values()[getShortValue()];
+      Operation type = OP_MAP[getShortValue()];
       long id = getLongValue();
       byte[] data = null;
       if (type.hasData()) {

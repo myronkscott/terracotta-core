@@ -86,7 +86,7 @@ public class AbstractTCNetworkMessage implements TCNetworkMessage {
 
   @Override
   public final TCNetworkHeader getHeader() {
-    checkNotRecycled();
+//    checkNotRecycled();
     return header;
   }
 

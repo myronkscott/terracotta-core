@@ -421,12 +421,17 @@ public class TCByteBufferInputStream extends InputStream implements TCByteBuffer
 
   @Override
   public final int readInt() throws IOException {
-    int byte1 = read();
-    int byte2 = read();
-    int byte3 = read();
-    int byte4 = read();
-    if ((byte1 | byte2 | byte3 | byte4) < 0) { throw new EOFException(); }
-    return ((byte1 << 24) + (byte2 << 16) + (byte3 << 8) + (byte4 << 0));
+    if (data[index].remaining() >= Integer.BYTES) {
+      checkClosed();
+      return data[index].getInt();
+    } else {
+      int byte1 = read();
+      int byte2 = read();
+      int byte3 = read();
+      int byte4 = read();
+      if ((byte1 | byte2 | byte3 | byte4) < 0) { throw new EOFException(); }
+      return ((byte1 << 24) + (byte2 << 16) + (byte3 << 8) + (byte4 << 0));
+    }
   }
 
   @Override
@@ -458,20 +463,25 @@ public class TCByteBufferInputStream extends InputStream implements TCByteBuffer
 
   @Override
   public final long readLong() throws IOException {
-    int byte1 = read();
-    int byte2 = read();
-    int byte3 = read();
-    int byte4 = read();
-    int byte5 = read();
-    int byte6 = read();
-    int byte7 = read();
-    int byte8 = read();
+    if (data[index].remaining() >= Long.BYTES) {
+      checkClosed();
+      return data[index].getLong();
+    } else {
+      int byte1 = read();
+      int byte2 = read();
+      int byte3 = read();
+      int byte4 = read();
+      int byte5 = read();
+      int byte6 = read();
+      int byte7 = read();
+      int byte8 = read();
 
-    if ((byte1 | byte2 | byte3 | byte4 | byte5 | byte6 | byte7 | byte8) < 0) { throw new EOFException(); }
+      if ((byte1 | byte2 | byte3 | byte4 | byte5 | byte6 | byte7 | byte8) < 0) { throw new EOFException(); }
 
-    return (((long) byte1 << 56) + ((long) (byte2 & 255) << 48) + ((long) (byte3 & 255) << 40)
-            + ((long) (byte4 & 255) << 32) + ((long) (byte5 & 255) << 24) + ((byte6 & 255) << 16)
-            + ((byte7 & 255) << 8) + ((byte8 & 255) << 0));
+      return (((long) byte1 << 56) + ((long) (byte2 & 255) << 48) + ((long) (byte3 & 255) << 40)
+              + ((long) (byte4 & 255) << 32) + ((long) (byte5 & 255) << 24) + ((byte6 & 255) << 16)
+              + ((byte7 & 255) << 8) + ((byte8 & 255) << 0));
+    }
   }
 
   @Override
