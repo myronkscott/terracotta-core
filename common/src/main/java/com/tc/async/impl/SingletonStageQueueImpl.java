@@ -30,6 +30,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static com.tc.async.impl.AbstractStageQueueImpl.SourceQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * This StageQueueImpl represents the sink and gives a handle to the source. We are internally just using a queue
@@ -61,8 +62,6 @@ public class SingletonStageQueueImpl<EC> extends AbstractStageQueueImpl<EC> {
                                                                 int queueSize,
                                                                 String stage) {
     BlockingQueue<Event> q = null;
-
-    Assert.eval(queueSize > 0);
 
     return new SourceQueueImpl(queueFactory.createInstance(type, queueSize));
   }
@@ -126,6 +125,7 @@ public class SingletonStageQueueImpl<EC> extends AbstractStageQueueImpl<EC> {
   private final class SourceQueueImpl implements SourceQueue {
 
     private final BlockingQueue<Event> queue;
+    private final AtomicInteger size = new AtomicInteger();
 
     public SourceQueueImpl(BlockingQueue<Event> queue) {
       this.queue = queue;
@@ -158,12 +158,16 @@ public class SingletonStageQueueImpl<EC> extends AbstractStageQueueImpl<EC> {
     @Override
     public Event poll(long timeout) throws InterruptedException {
       Event rv = (timeout == 0) ? this.queue.poll() : this.queue.poll(timeout, TimeUnit.MILLISECONDS);
+      if (rv != null) {
+        size.decrementAndGet();
+      }
       return rv;
     }
 
     @Override
     public void put(Event context) throws InterruptedException {
       this.queue.put(context);
+      size.incrementAndGet();
     }
 
     @Override

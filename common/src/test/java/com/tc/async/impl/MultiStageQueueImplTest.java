@@ -230,7 +230,7 @@ public class MultiStageQueueImplTest {
         return false;
       }
     };
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 100/8; i++) {
       impl.addToSink(incoming);
     }
     assertTrue(impl.partitionHand.get() > 0);
