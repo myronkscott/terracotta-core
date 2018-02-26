@@ -282,30 +282,46 @@ public class ProcessTransactionHandler implements ReconnectListener {
   private void addSequentially(ClientID target, Predicate<VoltronEntityMultiResponse> adder) {
     // don't bother if the client isNull, no where to send the message
     // if not, compute the result and schedule send if neccessary
+    SetOnceFlag handled = new SetOnceFlag();
     if (!target.isNull()) {
-      invokeReturn.compute(target, (client, vmr)-> {
+      while (!handled.isSet()) {
+        VoltronEntityMultiResponse vmr = invokeReturn.computeIfAbsent(target, (client)->{
+            Optional<MessageChannel> channel = safeGetChannel(target);
+            handled.set();
+            if (channel.isPresent()) {
+              VoltronEntityMultiResponse nm = (VoltronEntityMultiResponse)channel.get().createMessage(TCMessageType.VOLTRON_ENTITY_MULTI_RESPONSE);
+              return nm;
+            } else {
+              return null;
+            }
+        });
         if (vmr != null) {
           boolean added = adder.test(vmr);
-          Assert.assertTrue(added);
-        } else {
-          Optional<MessageChannel> channel = safeGetChannel(target);
-          if (channel.isPresent()) {
-            vmr = (VoltronEntityMultiResponse)channel.get().createMessage(TCMessageType.VOLTRON_ENTITY_MULTI_RESPONSE);
-            boolean added = adder.test(vmr);
+          if (handled.isSet()) {
+    //  if handled has already been set, this message was created in computeIfAbsent above 
+    //  it must have sending accounted for
             Assert.assertTrue(added);
-            // direct execution must be under compute lock because not all 
-            // messages are coming from the pipeline
+    // send direct if in direct mode
             if (DirectExecutionMode.isActivated() && multiSend.isEmpty()) {
+              invokeReturn.remove(target);
               waitForTransactions(vmr);
               vmr.send();
-              vmr = null;
             } else {
+    // send using the respond stage
               multiSend.getSink().addToSink(new ResponseMessage(vmr));
             }
+          } else {
+            if (added) {
+              handled.set();
+            } else {
+              // will cycle again
+            }
           }
+        } else {
+       //  there is no message because channel is gone, make sure loop stops
+          Assert.assertTrue(handled.isSet());
         }
-        return vmr;
-      });
+      }
     }
   }
 
