@@ -883,6 +883,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   }
 
   private WireProtocolMessage finalizeWireProtocolMessage(WireProtocolMessage message, int messageCount) {
+    logger.debug("finalizing message with count: {}", messageCount);
     final WireProtocolHeader hdr = (WireProtocolHeader) message.getHeader();
     hdr.setSourceAddress(getLocalAddress().getAddressBytes());
     hdr.setSourcePort(getLocalAddress().getPort());
