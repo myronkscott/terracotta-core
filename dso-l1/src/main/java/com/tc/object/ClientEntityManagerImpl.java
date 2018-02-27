@@ -64,6 +64,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -77,7 +79,7 @@ public class ClientEntityManagerImpl implements ClientEntityManager {
   private final Logger logger;
   
   private final ClientMessageChannel channel;
-  private final ConcurrentMap<TransactionID, InFlightMessage> inFlightMessages;
+  private final ConcurrentNavigableMap<TransactionID, InFlightMessage> inFlightMessages;
   private final MessagePendingCount requestTickets = new MessagePendingCount();
   private final AtomicLong currentTransactionID;
 
@@ -95,7 +97,7 @@ public class ClientEntityManagerImpl implements ClientEntityManager {
     
     this.channel = channel;
 
-    this.inFlightMessages = new ConcurrentHashMap<>();
+    this.inFlightMessages = new ConcurrentSkipListMap<>();
     this.currentTransactionID = new AtomicLong();
     this.stateManager = new ClientEntityStateManager();
     this.objectStoreMap = new ConcurrentHashMap<>(10240, 0.75f, 128);
@@ -300,9 +302,10 @@ public class ClientEntityManagerImpl implements ClientEntityManager {
     InFlightMessage inFlight = inFlightMessages.remove(id);
     if (inFlight != null) {
       inFlight.retired();
-      synchronized (this) {
-        requestTickets.messageRetired();
-        notify();
+      synchronized (this) {        
+        if (requestTickets.messageRetired()) {
+          notifyAll();
+        }
       }
     } else {
    // resend result or stop
@@ -530,19 +533,17 @@ public class ClientEntityManagerImpl implements ClientEntityManager {
     // Get the next transaction ID.
     TransactionID transactionID = new TransactionID(currentTransactionID.incrementAndGet());
     // Figure out the "trailing edge" of the current progress through the transaction stream.
-    TransactionID oldestTransactionPending = transactionID;
     // if reconnectable, discover the oldest transaction still being waited for
+    TransactionID oldest = transactionID;
+    
     if (this.channel.getProductId().isReconnectEnabled()) {
-      for (TransactionID pendingID : this.inFlightMessages.keySet()) {
-        if (oldestTransactionPending.compareTo(pendingID) > 0) {
-          // pendingID is earlier than oldestTransactionPending.
-          oldestTransactionPending = pendingID;
-        }
-      }
+      oldest = this.inFlightMessages.keySet().stream().sorted().findFirst().filter(t->transactionID.compareTo(t) > 0).orElse(transactionID);
     }
+    
+    Assert.assertTrue(oldest.compareTo(transactionID) <= 0);
     // Create the message and populate it.
     NetworkVoltronEntityMessage message = (NetworkVoltronEntityMessage) channel.createMessage(TCMessageType.VOLTRON_ENTITY_MESSAGE);
-    message.setContents(clientID, transactionID, entityID, entityDescriptor, type, requiresReplication, config, oldestTransactionPending, acks);
+    message.setContents(clientID, transactionID, entityID, entityDescriptor, type, requiresReplication, config, oldest, acks);
     return message;
   }
   
@@ -673,9 +674,9 @@ public class ClientEntityManagerImpl implements ClientEntityManager {
     }
 
     // synchronized by caller
-    private int messageRetired() {
+    private boolean messageRetired() {
       Assert.assertTrue(messagesPending < ClientConfigurationContext.MAX_PENDING_REQUESTS);
-      return ++messagesPending;
+      return messagesPending++ == 0;
     }
     
     private boolean messagePendingSlotAvailable() {
