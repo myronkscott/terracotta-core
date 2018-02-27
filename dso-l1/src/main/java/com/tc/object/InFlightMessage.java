@@ -125,15 +125,15 @@ public class InFlightMessage {
   }
   
   public synchronized void sent() {
-    ackDelivered(VoltronEntityMessage.Acks.SENT);
-    if (this.pendingAcks.isEmpty()) {
+    boolean waiting = ackDelivered(VoltronEntityMessage.Acks.SENT);
+    if (waiting && this.pendingAcks.isEmpty()) {
       notifyAll();
     }
   }
 
   public synchronized void received() {
-    ackDelivered(VoltronEntityMessage.Acks.RECEIVED);
-    if (this.pendingAcks.isEmpty()) {
+    boolean waiting = ackDelivered(VoltronEntityMessage.Acks.RECEIVED);
+    if (waiting && this.pendingAcks.isEmpty()) {
       notifyAll();
     }
   }
@@ -199,9 +199,9 @@ public class InFlightMessage {
     if (Trace.isTraceEnabled()) {
       trace.log("Received Result: " + value + " ; Exception: " + (error != null ? error.getLocalizedMessage() : "None"));
     }
-    ackDelivered(VoltronEntityMessage.Acks.RECEIVED);
-    ackDelivered(VoltronEntityMessage.Acks.COMPLETED);
-    if (pendingAcks.isEmpty()) {
+    boolean waiting = ackDelivered(VoltronEntityMessage.Acks.RECEIVED);
+    waiting = waiting | ackDelivered(VoltronEntityMessage.Acks.COMPLETED);
+    if (waiting && pendingAcks.isEmpty()) {
       notifyAll();
     }
 
@@ -242,24 +242,29 @@ public class InFlightMessage {
     pushOneMessage(raw);
   }
   
-  private void ackDelivered(VoltronEntityMessage.Acks ack) {
+  private boolean ackDelivered(VoltronEntityMessage.Acks ack) {
     if (Trace.isTraceEnabled()) {
       trace.log("Received ACK: " + ack);
     }
-    if (this.pendingAcks.remove(ack) && monitor != null) {
+    boolean waiting = this.pendingAcks.remove(ack);
+    if (waiting && monitor != null) {
       monitor.ackDelivered(ack);
     }
+    return waiting;
   }
 
   public synchronized void retired() {
-    ackDelivered(VoltronEntityMessage.Acks.RETIRED);
+    boolean waiting = ackDelivered(VoltronEntityMessage.Acks.RETIRED);
     if (this.blockGetOnRetired) {
       this.getCanComplete = true;
       if (message.getVoltronType() == VoltronEntityMessage.Type.INVOKE_ACTION) {
         Assert.assertTrue("failed " + this.message.getTransactionID(), value != null || exception != null);
       }
+      waiting = true;
     }
-    notifyAll();
+    if (waiting) {
+      notifyAll();
+    }
     if (monitor != null) {
       monitor.close();
     }

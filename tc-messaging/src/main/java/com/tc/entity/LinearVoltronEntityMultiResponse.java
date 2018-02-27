@@ -109,8 +109,7 @@ public class LinearVoltronEntityMultiResponse extends DSOMessageBase implements 
 
   @Override
   public int replay(ReplayReceiver receiver) {
-    int count = 0;
-    for (Op op : timeline) {
+    return timeline.stream().mapToInt(op->{
       switch(op.type) {
         case INVOKE_MESSAGE:
           receiver.message(new TransactionID(op.id), op.data);
@@ -135,9 +134,8 @@ public class LinearVoltronEntityMultiResponse extends DSOMessageBase implements 
         default:
           throw new AssertionError("unknown op");
       }
-      count+=1;
-    }
-    return count;
+      return 1;
+    }).sum();
   }
   
   
