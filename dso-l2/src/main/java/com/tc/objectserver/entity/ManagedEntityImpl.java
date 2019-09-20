@@ -31,7 +31,6 @@ import com.tc.exception.VoltronEntityUserExceptionWrapper;
 import com.tc.exception.VoltronWrapperException;
 import com.tc.l2.msg.SyncReplicationActivity;
 import com.tc.net.ClientID;
-import com.tc.net.NodeID;
 import com.tc.object.ClientInstanceID;
 import com.tc.object.EntityDescriptor;
 import com.tc.object.EntityID;
@@ -94,6 +93,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -121,7 +121,7 @@ public class ManagedEntityImpl implements ManagedEntity {
   // isInActiveState defines which entity type to check/create - we need the flag to represent the pre-create state.
   private boolean isInActiveState;
   //  for destroy, passives need to reference count to understand if entity is deletable
-  private int clientReferenceCount = 0;
+  private final AtomicInteger clientReferenceCount = new AtomicInteger();
   private final boolean canDelete;
   private boolean isTemp;
   private volatile boolean isDestroyed;
@@ -169,7 +169,7 @@ public class ManagedEntityImpl implements ManagedEntity {
     this.retirementManager = new RetirementManager();
     this.isInActiveState = isInActiveState;
     this.canDelete = canDelete;
-    this.clientReferenceCount = canDelete ? 0 : ManagedEntity.UNDELETABLE_ENTITY;
+    this.clientReferenceCount.set(canDelete ? 0 : ManagedEntity.UNDELETABLE_ENTITY);
     registry.setOwningEntity(this);
     this.codec = factory.getMessageCodec();
     this.syncCodec = factory.getSyncMessageCodec();
@@ -224,11 +224,13 @@ public class ManagedEntityImpl implements ManagedEntity {
         Assert.fail(request.getAction() + " should be filtered before reaching this point");
         resp = null;
         break;
+      case FETCH_ENTITY:
+      case RELEASE_ENTITY:
+        processReferenceEntity(request, data, resp);
+        break;
       case CREATE_ENTITY:
       case DESTROY_ENTITY:
-      case FETCH_ENTITY:
       case RECONFIGURE_ENTITY:
-      case RELEASE_ENTITY:
       case DISCONNECT_CLIENT:
         processLifecycleEntity(request, data, resp);
         break;
@@ -255,6 +257,35 @@ public class ManagedEntityImpl implements ManagedEntity {
     }
   }
   
+  private void processReferenceEntity(ServerEntityRequest create, MessagePayload data, ResultCapture resp) {
+    Trace.activeTrace().log("ManagedEntityImpl.processReferenceEntity");
+    boolean schedule = true;
+    if (this.isInActiveState) {
+      switch(create.getAction()) {
+        case FETCH_ENTITY:
+        case RELEASE_ENTITY:
+          if (data.canBeBusy()) {
+            schedule = interop.tryStartReference();
+          } else {
+            interop.startReference();
+          }
+          break;
+        default:
+          throw new AssertionError("unexpected");
+      }
+    }
+    if (schedule) {
+      scheduleInOrder(create, resp, data , ()-> {
+        invokeLifecycleOperation(create, data, resp);
+      }, ConcurrencyStrategy.UNIVERSAL_KEY);
+    } else {
+      if (!isActive()) {
+        throw new AssertionError();
+      }
+      resp.failure(new EntityBusyException(id.getClassName(), id.getEntityName(), "entity is busy in sync, retry"));
+    }
+  }
+    
   private void processLifecycleEntity(ServerEntityRequest create, MessagePayload data, ResultCapture resp) {
     Trace.activeTrace().log("ManagedEntityImpl.processLifecycleEntity");
     boolean schedule = true;
@@ -426,7 +457,7 @@ public class ManagedEntityImpl implements ManagedEntity {
     props.put("fetchID", this.fetchID.toString());
     props.put("entityID", this.id.toString());
     props.put("consumerID", this.consumerID);
-    props.put("referenceCount", this.clientReferenceCount);
+    props.put("referenceCount", this.clientReferenceCount.get());
     props.put("waitForExclusive", this.runnables.getState());
     props.put("retirement", this.retirementManager.getState());
     props.put("destroyed", this.isDestroyed);
@@ -707,9 +738,9 @@ public class ManagedEntityImpl implements ManagedEntity {
     } else if (null != commonServerEntity) {
       // We want to ensure that nobody somehow has a reference to this entity.
       if (!this.canDelete) {
-        Assert.assertTrue(clientReferenceCount < 0);
+        Assert.assertTrue(clientReferenceCount.get() < 0);
         response.failure(new VoltronWrapperException(new PermanentEntityException(entityDescriptor.getEntityID().getClassName(), entityDescriptor.getEntityID().getEntityName())));
-      } else if (clientReferenceCount == 0 && !retirementManager.hasServerInflightMessages()) {
+      } else if (clientReferenceCount.get() == 0 && !retirementManager.hasServerInflightMessages()) {
         Assert.assertTrue(!isInActiveState || clientEntityStateManager.verifyNoEntityReferences(this.fetchID));
         Assert.assertFalse(this.isDestroyed);
         commonServerEntity.destroy();
@@ -727,7 +758,7 @@ public class ManagedEntityImpl implements ManagedEntity {
         if (isInActiveState) {
           Assert.assertTrue("retirementManager:" + retirementManager.hasServerInflightMessages() +
                   " references:" + clientEntityStateManager.verifyNoEntityReferences(this.fetchID), 
-                  clientReferenceCount > 0 || retirementManager.hasServerInflightMessages() || !clientEntityStateManager.verifyNoEntityReferences(this.fetchID));
+                  clientReferenceCount.get() > 0 || retirementManager.hasServerInflightMessages() || !clientEntityStateManager.verifyNoEntityReferences(this.fetchID));
         }
         response.failure(new EntityReferencedException(entityDescriptor.getEntityID().getClassName(), entityDescriptor.getEntityID().getEntityName()));        
       }
@@ -970,8 +1001,7 @@ public class ManagedEntityImpl implements ManagedEntity {
       response.failure(new EntityNotFoundException(id.getClassName(), id.getEntityName()));
     } else {
       if (canDelete) {
-        clientReferenceCount += 1;
-        Assert.assertTrue(clientReferenceCount > 0);
+        Assert.assertTrue(clientReferenceCount.incrementAndGet() > 0);
       }
       // The FETCH can only come directly from a client so we can down-cast.
       ClientID clientID = (ClientID) getEntityRequest.getNodeID();
@@ -1018,8 +1048,7 @@ public class ManagedEntityImpl implements ManagedEntity {
       response.failure(new EntityNotFoundException(id.getClassName(), id.getEntityName()));
     } else {
       if (canDelete) {
-        clientReferenceCount -= 1;
-        Assert.assertTrue(clientReferenceCount >= 0);
+        Assert.assertTrue(clientReferenceCount.decrementAndGet() >= 0);
       }
 
       ClientID clientID = (ClientID) request.getNodeID();
@@ -1031,7 +1060,7 @@ public class ManagedEntityImpl implements ManagedEntity {
         this.activeServerEntity.disconnected(clientInstance);
         // Fire the event that the client released the entity.
         this.eventCollector.clientDidReleaseEntity(clientID, this.id, this.consumerID, request.getClientInstance());
-        if (isTemp && clientReferenceCount == 0) {
+        if (isTemp && clientReferenceCount.get() == 0) {
           this.messageSelf.addToSink(new DestroyMessage(EntityDescriptor.createDescriptorForLifecycle(id, version)));
         }
       } else {
@@ -1046,9 +1075,9 @@ public class ManagedEntityImpl implements ManagedEntity {
   @Override
   public void resetReferences(int count) {
     if (canDelete) {
-      this.clientReferenceCount = count;
+      this.clientReferenceCount.set(count);
     } else {
-      Assert.assertEquals(this.clientReferenceCount, ManagedEntityImpl.UNDELETABLE_ENTITY);
+      Assert.assertEquals(this.clientReferenceCount.get(), ManagedEntityImpl.UNDELETABLE_ENTITY);
     }
   }
   
@@ -1062,9 +1091,9 @@ public class ManagedEntityImpl implements ManagedEntity {
 // any clients, previously connected will reconnect or not.  Failed reconnects will be cleaned
 // up on passives 
     if (canDelete) {
-      this.clientReferenceCount = 0;
+      this.clientReferenceCount.set(0);
     } else {
-      Assert.assertEquals(this.clientReferenceCount, ManagedEntityImpl.UNDELETABLE_ENTITY);
+      Assert.assertEquals(this.clientReferenceCount.get(), ManagedEntityImpl.UNDELETABLE_ENTITY);
     }
     if (!this.isDestroyed) {
       logger.info("Promoting " + getID() + " to active entity");
@@ -1104,7 +1133,7 @@ public class ManagedEntityImpl implements ManagedEntity {
     this.executor.scheduleRequest(interop.isSyncing(), this.id, this.version, this.fetchID, new ServerEntityRequestImpl(ClientInstanceID.NULL_ID, ServerEntityAction.LOCAL_FLUSH_AND_SYNC, ClientID.NULL_ID, TransactionID.NULL_ID, TransactionID.NULL_ID, false), MessagePayload.emptyPayload(), (w)-> { 
         Assert.assertTrue(this.isInActiveState);
         if (!this.isDestroyed) {
-          executor.scheduleSync(SyncReplicationActivity.createStartEntityMessage(id, version, fetchID, TCByteBufferFactory.wrap(constructorInfo), canDelete ? this.clientReferenceCount : ManagedEntity.UNDELETABLE_ENTITY), passive).waitForCompleted();
+          executor.scheduleSync(SyncReplicationActivity.createStartEntityMessage(id, version, fetchID, TCByteBufferFactory.wrap(constructorInfo), canDelete ? this.clientReferenceCount.get() : ManagedEntity.UNDELETABLE_ENTITY), passive).waitForCompleted();
         }
         interop.syncStarted();
         syncStart.complete();
