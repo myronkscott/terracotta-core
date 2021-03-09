@@ -59,8 +59,8 @@ public class AbstractConnectionServiceTest {
   public void setUp() {
     clientFactoryMock = mock(TerracottaInternalClientFactory.class);
     EndpointConnector endpointConnectorMock = mock(EndpointConnector.class);
-    when(clientFactoryMock.createL1Client(any(), any())).thenReturn(mock(TerracottaInternalClient.class));
-    connectionService = new AbstractConnectionService(TEST_SCHEME, endpointConnectorMock, clientFactoryMock) {};
+    when(clientFactoryMock.createL1Client(anyString(), any(), any())).thenReturn(mock(TerracottaInternalClient.class));
+    connectionService = new AbstractConnectionService(Collections.singletonList(TEST_SCHEME), endpointConnectorMock, clientFactoryMock) {};
   }
 
   @Test

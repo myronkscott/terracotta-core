@@ -24,8 +24,6 @@ import com.tc.lang.L1ThrowableHandler;
 import com.tc.lang.TCThreadGroup;
 import com.tc.properties.TCPropertiesImpl;
 import com.tc.util.UUID;
-import java.lang.ref.Reference;
-import java.lang.ref.WeakReference;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
@@ -70,15 +68,7 @@ public class DistributedObjectClientFactory {
     boolean async = Boolean.parseBoolean(this.properties.getProperty(ConnectionPropertyNames.CONNECTION_ASYNC, "false"));
     
     DistributedObjectClient client = ClientFactory.createClient(serverAddresses, builder, group, uuid, name, async);
-
-    Reference<DistributedObjectClient> ref = new WeakReference<>(client);
-    group.addCallbackOnExitDefaultHandler((state)->{
-      DistributedObjectClient ce = ref.get();
-      if (ce != null) {
-        ce.dump();
-        ce.shutdown();
-      }
-    });
+    client.addShutdownHook(shutdown);
     
     try {
       client.start();

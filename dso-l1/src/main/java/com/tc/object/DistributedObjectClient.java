@@ -117,6 +117,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 
 /**
@@ -140,7 +141,7 @@ public class DistributedObjectClient {
   private final String                                 uuid;
   private final String                               name;
 
-  private ClientShutdownManager                      shutdownManager;
+  private final ClientShutdownManager                shutdownManager = new ClientShutdownManager(this);
 
   private final SetOnceFlag                          clientStopped                       = new SetOnceFlag();
   private final SetOnceFlag                          connectionMade                      = new SetOnceFlag();
@@ -148,7 +149,6 @@ public class DistributedObjectClient {
   private final SetOnceRef<Exception>                exceptionMade                       = new SetOnceRef<>();
  
   private ClientEntityManager clientEntityManager;
-  private RequestReceiveHandler singleMessageReceiver;
   private final StageManager communicationStageManager;
   
   private final boolean isAsync;
@@ -173,6 +173,14 @@ public class DistributedObjectClient {
     // We need a StageManager to create the SEDA stages used for handling the messages.
     final SEDA seda = new SEDA(threadGroup);
     communicationStageManager = seda.getStageManager();
+    Reference<DistributedObjectClient> ref = new WeakReference<>(this);
+    threadGroup.addCallbackOnExitDefaultHandler((state)->{
+      DistributedObjectClient ce = ref.get();
+      if (ce != null) {
+        ce.dump();
+        ce.shutdown();
+      }
+    });
   }
 
   public synchronized void start() {
@@ -247,9 +255,9 @@ public class DistributedObjectClient {
     DSO_LOGGER.debug("Created channel.");
 
 
-    this.clientEntityManager = this.clientBuilder.createClientEntityManager(clientChannel, this.communicationStageManager);
-    this.singleMessageReceiver = new RequestReceiveHandler(this.clientEntityManager);
-    MultiRequestReceiveHandler mutil = new MultiRequestReceiveHandler(this.clientEntityManager);
+    clientEntityManager = this.clientBuilder.createClientEntityManager(clientChannel, this.communicationStageManager);
+    RequestReceiveHandler singleMessageReceiver = new RequestReceiveHandler(clientEntityManager);
+    MultiRequestReceiveHandler mutil = new MultiRequestReceiveHandler(clientEntityManager);
     Stage<VoltronEntityMultiResponse> multiResponseStage = this.communicationStageManager.createStage(ClientConfigurationContext.VOLTRON_ENTITY_MULTI_RESPONSE_STAGE, VoltronEntityMultiResponse.class, mutil, 1, maxSize);
     clientChannel.addAttachment("ChannelStats", (PrettyPrintable)() -> {
         Map<String, Object> map = new LinkedHashMap<>();
@@ -276,7 +284,7 @@ public class DistributedObjectClient {
     this.clientHandshakeManager = this.clientBuilder
         .createClientHandshakeManager(new ClientIDLogger(clientChannel, LoggerFactory
                                           .getLogger(ClientHandshakeManagerImpl.class)), chmf, sessionManager,
-                                          this.uuid, this.name, pInfo.version(), this.clientEntityManager);
+                                          this.uuid, this.name, pInfo.version(), clientEntityManager);
 
     ClientChannelEventController.connectChannelEventListener(clientChannel, clientHandshakeManager);
 
@@ -297,31 +305,37 @@ public class DistributedObjectClient {
 
     EventHandler<ClientHandshakeResponse> handshake = new ClientCoordinationHandler(this.clientHandshakeManager);
 
-    initChannelMessageRouter(messageRouter, EventHandler.directSink(handshake), isAsync ? multiResponseStage.getSink() : EventHandler.directSink(mutil));
-    connectionThread.set(new Thread(threadGroup, ()->{
-          while (!clientStopped.isSet()) {
-            try {
-              openChannel(clientChannel);
-              waitForHandshake(clientChannel);
-              connectionMade();
-              break;
-            } catch (RuntimeException runtime) {
-              synchronized (connectionMade) {
-                exceptionMade.set(runtime);
-                connectionMade.notifyAll();
-              }
-              break;
-            } catch (InterruptedException ie) {
-              synchronized (connectionMade) {
-                exceptionMade.set(ie);
-                connectionMade.notifyAll();
-              }              // We are in the process of letting the thread terminate so we don't handle this in a special way.
-              break;
-            }
-          }
-          //  don't reset interrupted, thread is done
-        }, "Connection Maker - " + uuid));
-      connectionThread.get().start();
+    initChannelMessageRouter(messageRouter, EventHandler.directSink(handshake), isAsync ? multiResponseStage.getSink() : EventHandler.directSink(mutil),
+            clientEntityManager, singleMessageReceiver);
+
+    return clientChannel;
+  }
+
+  private boolean directConnect(ClientMessageChannel clientChannel) {
+    try {
+      clientChannel.open(serverAddresses);
+      waitForHandshake(clientChannel);
+      connectionMade();
+      return true;
+    } catch (CommStackMismatchException |
+            MaxConnectionsExceededException |
+            TCTimeoutException tt) {
+      DSO_LOGGER.error(tt.getMessage());
+      throw new IllegalStateException(tt);
+    } catch (IOException io) {
+      DSO_LOGGER.debug("connection error", io);
+      return false;
+    }
+  }
+
+  private void connectionSequence(ClientMessageChannel clientChannel) {
+    try {
+      openChannel(clientChannel);
+      waitForHandshake(clientChannel);
+      connectionMade();
+    } catch (RuntimeException | InterruptedException runtime) {
+      exceptionMade.set(runtime);
+    }
   }
 
   private void connectionMade() {
@@ -413,51 +427,39 @@ public class DistributedObjectClient {
   }
 
   private void initChannelMessageRouter(TCMessageRouter messageRouter, Sink<ClientHandshakeResponse> ack, 
-                                         Sink<VoltronEntityMultiResponse> multiSink) {
-    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_ACK_MESSAGE, new TCMessageHydrateSink<>(ack));
-    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_REFUSED_MESSAGE, new TCMessageHydrateSink<>(ack));
-    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_REDIRECT_MESSAGE, new TCMessageHydrateSink<>(ack));
-    messageRouter.routeMessageType(TCMessageType.CLUSTER_MEMBERSHIP_EVENT_MESSAGE, new TCMessageHydrateSink<>((context) -> {/* black hole for compatibility */}));
-    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_RECEIVED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, this::convertSingleToMulti));
-    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_COMPLETED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, this::convertSingleToMulti));
-    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_RETIRED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, this::convertSingleToMulti));
-    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_MULTI_RESPONSE, new TCMessageHydrateSink<>(multiSink));
-    messageRouter.routeMessageType(TCMessageType.DIAGNOSTIC_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, this::convertSingleToMulti));
-    DSO_LOGGER.debug("Added message routing types.");
-  }
-    
-  private VoltronEntityMultiResponse convertSingleToMulti(VoltronEntityResponse response) {
-    if (response instanceof DiagnosticResponse) {
-      // dont convert, just directly execute
-      this.clientEntityManager.complete(response.getTransactionID(), ((DiagnosticResponse)response).getResponse());
-      return null;
-    } else {
+                                         Sink<VoltronEntityMultiResponse> multiSink, ClientEntityManager cem, RequestReceiveHandler single) {
+    Function<VoltronEntityResponse, VoltronEntityMultiResponse> multiConverter = (response)-> {
       return new ReplayVoltronEntityMultiResponse() {
         @Override
         public int replay(VoltronEntityMultiResponse.ReplayReceiver receiver) {
           try {
-            singleMessageReceiver.handleEvent(response);
+            single.handleEvent(response);
             return 1;
           } catch (EventHandlerException ee) {
             throw new RuntimeException(ee);
           }
         }
       };
-    }
+    };
+    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_ACK_MESSAGE, new TCMessageHydrateSink<>(ack));
+    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_REFUSED_MESSAGE, new TCMessageHydrateSink<>(ack));
+    messageRouter.routeMessageType(TCMessageType.CLIENT_HANDSHAKE_REDIRECT_MESSAGE, new TCMessageHydrateSink<>(ack));
+    messageRouter.routeMessageType(TCMessageType.CLUSTER_MEMBERSHIP_EVENT_MESSAGE, new TCMessageHydrateSink<>((context) -> {/* black hole for compatibility */}));
+    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_RECEIVED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, multiConverter));
+    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_COMPLETED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, multiConverter));
+    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_RETIRED_RESPONSE, new TCMessageHydrateAndConvertSink<>(multiSink, multiConverter));
+    messageRouter.routeMessageType(TCMessageType.VOLTRON_ENTITY_MULTI_RESPONSE, new TCMessageHydrateSink<>(multiSink));
+    messageRouter.routeMessageType(TCMessageType.DIAGNOSTIC_RESPONSE, new TCMessageHydrateAndConvertSink<DiagnosticResponse, Void>(null, (r)-> {
+      cem.complete(r.getTransactionID(), r.getResponse());
+      return null;
+    }));
+    DSO_LOGGER.debug("Added message routing types.");
   }
 
   public ClientEntityManager getEntityManager() {
     return this.clientEntityManager;
   }
 
-  public CommunicationsManager getCommunicationsManager() {
-    return this.communicationsManager;
-  }
-
-  public ClientHandshakeManager getClientHandshakeManager() {
-    return this.clientHandshakeManager;
-  }
-  
   public String getClientState() {
     PrettyPrinter printer = new MapListPrettyPrint();
     this.communicationStageManager.prettyPrint(printer);
@@ -467,10 +469,6 @@ public class DistributedObjectClient {
 
   public void dump() {
     DSO_LOGGER.info(getClientState());
-  }
-
-  public void shutdown() {
-    shutdown(false);
   }
 
   void shutdownResources() {
@@ -484,6 +482,10 @@ public class DistributedObjectClient {
       } finally {
         this.counterManager = null;
       }
+    }
+
+    if (this.clientHandshakeManager != null) {
+      this.clientHandshakeManager.shutdown();
     }
 
     ClientMessageChannel clientChannel = this.getClientMessageChannel();
@@ -630,17 +632,7 @@ public class DistributedObjectClient {
     }
   }
 
-  private void shutdownClient(boolean forceImmediate) {
-    if (this.shutdownManager != null) {
-      try {
-        this.shutdownManager.execute(forceImmediate);
-      } finally {
-        
-      }
-    }
-  }
-
-  private void shutdown(boolean forceImmediate) {
+  public void shutdown() {
     if (connectionThread.isSet()) {
       connectionThread.get().interrupt();
     }
@@ -650,9 +642,9 @@ public class DistributedObjectClient {
       }
       ClientMessageChannel clientChannel = this.getClientMessageChannel();
       if (clientChannel != null && !clientChannel.getProductID().isInternal() && clientChannel.isConnected()) {
-        DSO_LOGGER.info("closing down Terracotta Connection force=" + forceImmediate + " channel=" + clientChannel.getChannelID() + " client=" + clientChannel.getClientID());
+        DSO_LOGGER.info("closing down Terracotta Connection channel=" + clientChannel.getChannelID() + " client=" + clientChannel.getClientID());
       }
-      shutdownClient(forceImmediate);
+      this.shutdownManager.execute();
     }
   }
   
