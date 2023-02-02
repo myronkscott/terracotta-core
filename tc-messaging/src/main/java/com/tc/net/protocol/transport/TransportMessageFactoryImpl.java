@@ -18,10 +18,13 @@
  */
 package com.tc.net.protocol.transport;
 
+import com.tc.bytes.TCByteBufferReference;
 import com.tc.exception.TCInternalError;
 import com.tc.io.TCByteBufferOutputStream;
 import com.tc.net.core.TCConnection;
 import com.tc.net.protocol.TCProtocolException;
+import java.util.Arrays;
+import java.util.LinkedList;
 
 public class TransportMessageFactoryImpl implements TransportHandshakeMessageFactory, HealthCheckerProbeMessageFactory {
   @Override
@@ -117,7 +120,7 @@ public class TransportMessageFactoryImpl implements TransportHandshakeMessageFac
 
     final TransportMessageImpl packet;
     try {
-      packet = new TransportMessageImpl(source, header, bbos.toArray());
+      packet = new TransportMessageImpl(source, header, new TCByteBufferReference(Arrays.asList(bbos.toArray()), new LinkedList<>()));
     } catch (TCProtocolException e) {
       throw new TCInternalError(e);
     }

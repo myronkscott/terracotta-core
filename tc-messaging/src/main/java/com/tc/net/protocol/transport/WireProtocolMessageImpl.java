@@ -18,7 +18,7 @@
  */
 package com.tc.net.protocol.transport;
 
-import com.tc.bytes.TCByteBuffer;
+import com.tc.bytes.TCByteBufferReference;
 import com.tc.net.core.TCConnection;
 import com.tc.net.protocol.TCNetworkHeader;
 import com.tc.net.protocol.TCNetworkMessage;
@@ -51,10 +51,15 @@ public class WireProtocolMessageImpl extends TCNetworkMessageImpl implements Wir
     WireProtocolMessage rv = new WireProtocolMessageImpl(source, header, msgPayload);
     return rv;
   }
+  protected WireProtocolMessageImpl(TCConnection source, TCNetworkHeader header, TCByteBufferReference data) {
+    this(source, header, data.reference());
+  }
   
-  protected WireProtocolMessageImpl(TCConnection source, TCNetworkHeader header, TCByteBuffer[] data) {
-    super(header, data);
+  protected WireProtocolMessageImpl(TCConnection source, TCNetworkHeader header, TCByteBufferReference.Ref buffers) {
+    super(header);
     this.sourceConnection = source;
+    setPayload(buffers.asArray());
+    addCompleteCallback(buffers::close);
     message = Optional.empty();
   }
   

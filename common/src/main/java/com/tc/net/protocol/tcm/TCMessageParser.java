@@ -25,6 +25,7 @@ import com.tc.bytes.TCByteBuffer;
 import com.tc.io.TCByteBufferInputStream;
 import com.tc.net.protocol.TCNetworkMessage;
 import com.tc.util.Assert;
+import java.util.Arrays;
 
 /**
  * A class that knows how to parse TCMessages out of raw bytes
@@ -39,7 +40,7 @@ class TCMessageParser {
 
   TCAction parseMessage(MessageChannel source, TCNetworkMessage msg) {
     TCByteBuffer[] data = msg.getPayload();
-    TCMessageHeader hdr = new TCMessageHeaderImpl(data[0].duplicate().limit(TCMessageHeader.HEADER_LENGTH));
+    TCMessageHeader hdr = new TCMessageHeaderImpl(data[0].slice().limit(TCMessageHeader.HEADER_LENGTH));
     final int headerLength = hdr.getHeaderByteLength();
 
     if (headerLength != TCMessageHeader.HEADER_LENGTH) {
@@ -49,17 +50,8 @@ class TCMessageParser {
       throw new RuntimeException("Invalid header length: " + headerLength);
     }
 
-    final TCByteBuffer msgData[];
-
-    if (data[0].limit() > headerLength) {
-      msgData = new TCByteBuffer[data.length];
-      System.arraycopy(data, 0, msgData, 0, msgData.length);
-      msgData[0] = msgData[0].position(headerLength).slice();
-    } else {
-      Assert.eval(data.length > 1);
-      msgData = new TCByteBuffer[data.length - 1];
-      System.arraycopy(data, 1, msgData, 0, msgData.length);
-    }
+    data[0].position(headerLength + data[0].position());
+    final TCByteBuffer msgData[] = Arrays.asList(data).stream().filter(TCByteBuffer::hasRemaining).map(TCByteBuffer::slice).toArray(TCByteBuffer[]::new);
 
     final int msgType = hdr.getMessageType();
     final TCMessageType type = TCMessageType.getInstance(hdr.getMessageType());
@@ -79,9 +71,11 @@ class TCMessageParser {
     for (int i = 0; i < data.length; i++) {
       sb.append(data[i]);
       sb.append(" { ");
-      byte b[] = data[i].array();
-      for (int j = 0; j < b.length; j++) {
-        sb.append(b[j]).append(" ");
+      if (data[i].hasArray()) {
+        byte b[] = data[i].array();
+        for (int j = 0; j < b.length; j++) {
+          sb.append(b[j]).append(" ");
+        }
       }
       sb.append(" } ");
     }

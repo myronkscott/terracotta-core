@@ -22,13 +22,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.tc.bytes.TCByteBuffer;
+import com.tc.bytes.TCByteBufferReference;
 import com.tc.net.core.TCConnection;
 import com.tc.net.protocol.AbstractTCNetworkHeader;
 import com.tc.net.protocol.AbstractTCProtocolAdaptor;
 import com.tc.net.protocol.TCNetworkHeader;
 import com.tc.net.protocol.TCNetworkMessage;
 import com.tc.net.protocol.TCProtocolException;
-import com.tc.util.Assert;
 
 import java.util.Iterator;
 import java.util.Queue;
@@ -90,7 +90,7 @@ public class WireProtocolAdaptorImpl extends AbstractTCProtocolAdaptor implement
   }
 
   @Override
-  protected TCNetworkMessage createMessage(TCConnection source, TCNetworkHeader hdr, TCByteBuffer[] data)
+  protected TCNetworkMessage createMessage(TCConnection source, TCNetworkHeader hdr, TCByteBufferReference data)
       throws TCProtocolException {
     if (data == null) { throw new TCProtocolException("Wire protocol messages must have a payload"); }
     WireProtocolHeader wph = (WireProtocolHeader) hdr;

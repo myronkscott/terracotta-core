@@ -49,6 +49,7 @@ package com.tc.net.protocol.transport;
 
 import com.tc.bytes.TCByteBuffer;
 import com.tc.bytes.TCByteBufferFactory;
+import com.tc.bytes.TCByteBufferReference;
 import com.tc.io.TCByteBufferInputStream;
 import com.tc.net.core.TCConnection;
 import com.tc.net.protocol.TCNetworkMessage;
@@ -60,12 +61,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Optional;
 
 public class WireProtocolGroupMessageImpl extends TCNetworkMessageImpl implements WireProtocolGroupMessage {
 
   private final TCConnection                sourceConnection;
   private final List<TCActionNetworkMessage> messagePayloads;
+  private final Optional<TCByteBufferReference.Ref> messageSource;
 
   public static WireProtocolGroupMessageImpl wrapMessages(List<TCActionNetworkMessage> msgPayloads,
                                                           TCConnection source) {
@@ -77,8 +81,12 @@ public class WireProtocolGroupMessageImpl extends TCNetworkMessageImpl implement
 
   // used by the reader
   protected WireProtocolGroupMessageImpl(TCConnection source, WireProtocolHeader header,
-                                         TCByteBuffer[] messagePayloadByteBuffers) {
-    super(header, messagePayloadByteBuffers);
+                                         TCByteBufferReference messagePayloadByteBuffers) {
+    super(header);
+    TCByteBufferReference.Ref buffers = messagePayloadByteBuffers.reference();
+    setPayload(buffers.asArray());
+    addCompleteCallback(buffers::close);
+    this.messageSource = Optional.of(buffers);
     this.sourceConnection = source;
     messagePayloads = null;
   }
@@ -88,6 +96,7 @@ public class WireProtocolGroupMessageImpl extends TCNetworkMessageImpl implement
     super(header);
     this.sourceConnection = source;
     this.messagePayloads = messagePayloads;
+    this.messageSource = Optional.empty();
   }
 
   @Override
@@ -123,22 +132,46 @@ public class WireProtocolGroupMessageImpl extends TCNetworkMessageImpl implement
   private List<TCNetworkMessage> getMessagesFromByteBuffers() throws IOException {
     ArrayList<TCNetworkMessage> messages = new ArrayList<>();
 
-    TCByteBufferInputStream msgs = new TCByteBufferInputStream(getPayload());
+    TCByteBufferReference.Ref src = messageSource.get();
 
-    for (int i = 0; i < getWireProtocolHeader().getMessageCount(); i++) {
-      int msgLen = msgs.readInt();
-      short msgProto = msgs.readShort();
+    try (TCByteBufferInputStream msgs = new TCByteBufferInputStream(messageSource.get().asArray())) {
+      for (int i = 0; i < getWireProtocolHeader().getMessageCount(); i++) {
+        int msgLen = msgs.readInt();
+        short msgProto = msgs.readShort();
 
-      WireProtocolHeader hdr;
-      hdr = (WireProtocolHeader) getWireProtocolHeader().clone();
-      hdr.setTotalPacketLength(hdr.getHeaderByteLength() + msgLen);
-      hdr.setProtocol(msgProto);
-      hdr.setMessageCount(1);
-      hdr.computeChecksum();
-      WireProtocolMessage msg = new WireProtocolMessageImpl(this.sourceConnection, hdr, new TCByteBuffer[] {msgs.read(msgLen)});
-      messages.add(msg);
+        WireProtocolHeader hdr;
+        hdr = (WireProtocolHeader) getWireProtocolHeader().clone();
+        hdr.setTotalPacketLength(hdr.getHeaderByteLength() + msgLen);
+        hdr.setProtocol(msgProto);
+        hdr.setMessageCount(1);
+        hdr.computeChecksum();
+        WireProtocolMessage msg = new WireProtocolMessageImpl(this.sourceConnection, hdr, limit(src.duplicate(), msgLen));
+        Iterator<TCByteBuffer> test = limit(src.duplicate(), msgLen).iterator();
+        msgs.skip(msgLen);
+//        WireProtocolMessage msg = new WireProtocolMessageImpl(this.sourceConnection, hdr, new TCByteBufferReference(Arrays.asList(new TCByteBuffer[] {msgs.read(msgLen)}), new LinkedList<>()));
+        messages.add(msg);
+      }
     }
+
     return messages;
+  }
+  
+  private TCByteBufferReference.Ref limit(TCByteBufferReference.Ref buffers, int limit) {
+    Iterator<TCByteBuffer> bufs = buffers.iterator();
+    int available = 0;
+    while (bufs.hasNext()) {
+      TCByteBuffer buf = bufs.next();
+      int remain = buf.remaining();
+      if (!buf.hasRemaining()) {
+        bufs.remove();
+      } else if (available + remain >= limit) {
+        buf.limit(buf.position() + limit - available);
+        bufs.forEachRemaining(r->r.position(r.limit()));
+      } else {
+        available += remain;
+      }
+    }
+    return buffers;
   }
 
   @Override

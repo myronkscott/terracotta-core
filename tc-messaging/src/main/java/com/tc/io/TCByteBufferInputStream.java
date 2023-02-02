@@ -26,7 +26,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.BufferUnderflowException;
-import java.util.Queue;
+import java.util.Arrays;
 
 public class TCByteBufferInputStream extends InputStream implements TCByteBufferInput {
   private static final int            EOF                     = -1;
@@ -54,16 +54,10 @@ public class TCByteBufferInputStream extends InputStream implements TCByteBuffer
     if (data == null) { throw new NullPointerException(); }
 
     long length = 0;
+    
+    this.data = data;
 
-    this.data = new TCByteBuffer[data.length];
-
-    for (int i = 0, n = data.length; i < n; i++) {
-      TCByteBuffer buf = data[i];
-      if (buf == null) { throw new NullPointerException("null buffer at index " + i); }
-
-      this.data[i] = buf.duplicate().rewind();
-      length += buf.limit();
-    }
+    length = Arrays.asList(data).stream().map(TCByteBuffer::remaining).map(Integer::longValue).reduce(0L, Long::sum);
 
     if (length > Integer.MAX_VALUE) { throw new IllegalArgumentException("too much data: " + length); }
 
@@ -72,17 +66,7 @@ public class TCByteBufferInputStream extends InputStream implements TCByteBuffer
 
     this.onCloseHook = onClose;
   }
-
-  public TCByteBufferInputStream(TCByteBuffer[] data, Queue<TCByteBuffer> returns) {
-    this(data, () -> {
-      if (returns != null) {
-        for (TCByteBuffer buf : data) {
-          returns.offer(buf.reInit());
-        }
-      }
-    });
-  }
-
+  
   public TCByteBufferInputStream(TCByteBuffer[] data) {
     this(data, ()->{});
   }
@@ -263,7 +247,7 @@ public class TCByteBufferInputStream extends InputStream implements TCByteBuffer
   public final int read(byte[] b) {
     return read(b, 0, b.length);
   }
-  
+
   @Override
   public final TCByteBuffer read(int len) {
     checkClosed();

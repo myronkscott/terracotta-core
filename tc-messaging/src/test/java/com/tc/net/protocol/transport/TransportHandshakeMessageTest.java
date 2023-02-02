@@ -19,6 +19,9 @@
 package com.tc.net.protocol.transport;
 
 import com.tc.bytes.TCByteBuffer;
+import com.tc.bytes.TCByteBufferReference;
+import java.util.Arrays;
+import java.util.LinkedList;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -45,7 +48,7 @@ public class TransportHandshakeMessageTest {
 
     WireProtocolHeader header = new WireProtocolHeader();
     header.setProtocol(WireProtocolHeader.PROTOCOL_TRANSPORT_HANDSHAKE);
-    message = new TransportMessageImpl(null, header, payload);
+    message = new TransportMessageImpl(null, header, new TCByteBufferReference(Arrays.asList(payload), new LinkedList<>()));
     assertEquals(isMaxConnectionsExceeded, message.isMaxConnectionsExceeded());
     assertEquals(maxConnections, message.getMaxConnections());
   }

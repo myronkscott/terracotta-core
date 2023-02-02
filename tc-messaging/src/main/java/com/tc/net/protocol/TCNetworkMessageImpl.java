@@ -37,11 +37,6 @@ public class TCNetworkMessageImpl implements TCNetworkMessage {
   protected static final Logger logger = LoggerFactory.getLogger(TCNetworkMessage.class);
   private static final int        MESSAGE_DUMP_MAXBYTES = 4 * 1024;
 
-  public TCNetworkMessageImpl(TCNetworkHeader header, TCByteBuffer[] payload) {
-    this(header);
-    setPayload(payload);
-  }
-
   protected TCNetworkMessageImpl(TCNetworkHeader header) {
     Assert.eval(header != null);
     this.header = header;
