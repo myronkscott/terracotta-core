@@ -65,7 +65,7 @@ public class ClusterStatePersistor {
   public State getInitialState() {
     return initialState;
   }
-
+  
   public void setCurrentL2State(State state) {
     // do not persist stop state
     if (!StateManager.STOP_STATE.equals(state)) {

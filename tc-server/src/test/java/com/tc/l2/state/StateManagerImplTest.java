@@ -88,6 +88,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.terracotta.server.Server;
 import org.terracotta.server.ServerEnv;
+import com.tc.objectserver.persistence.ServerPersistentState;
 
 
 public class StateManagerImplTest {
@@ -135,7 +136,7 @@ public class StateManagerImplTest {
       nodeSet.add(nodes[i]);
       stageControllers[i] = mock(StageController.class);
       mgmt[i] = mock(ManagementTopologyEventCollector.class);
-      ClusterStatePersistor clusterStatePersistorMock = mock(ClusterStatePersistor.class);
+      ServerPersistentState clusterStatePersistorMock = mock(ServerPersistentState.class);
       when(clusterStatePersistorMock.isDBClean()).thenReturn(Boolean.TRUE);
 //      tcServers[i] = mock(TCServer.class);
       stageManagers[i] = new StageManagerImpl(new ThreadGroup("test"), new QueueFactory());
@@ -243,9 +244,9 @@ public class StateManagerImplTest {
     StageController stageController = mock(StageController.class);
     ManagementTopologyEventCollector mgmtController = mock(ManagementTopologyEventCollector.class);
     WeightGeneratorFactory weightGeneratorFactory = RandomWeightGenerator.createTestingFactory(2);
-    ClusterStatePersistor statePersistor = mock(ClusterStatePersistor.class);
+    ServerPersistentState statePersistor = mock(ServerPersistentState.class);
     when(statePersistor.isDBClean()).thenReturn(Boolean.TRUE);
-    when(statePersistor.getInitialState()).thenReturn(new State("PASSIVE-STANDBY"));
+    when(statePersistor.getInitialMode()).thenReturn(ServerMode.PASSIVE);
 
     ServerID node = mock(ServerID.class);
     when(grp.getLocalNodeID()).thenReturn(node);
@@ -304,7 +305,7 @@ public class StateManagerImplTest {
     ManagementTopologyEventCollector mgmtController = mock(ManagementTopologyEventCollector.class);
     StageManager stageManager = mock(StageManager.class);
     WeightGeneratorFactory weightGeneratorFactory = RandomWeightGenerator.createTestingFactory(2);
-    ClusterStatePersistor statePersistor = mock(ClusterStatePersistor.class);
+    ServerPersistentState statePersistor = mock(ServerPersistentState.class);
     when(statePersistor.isDBClean()).thenReturn(Boolean.TRUE);
 
     ServerID node = mock(ServerID.class);
@@ -414,9 +415,9 @@ public class StateManagerImplTest {
     when(availabilityMgr.createVerificationEnrollment(any(NodeID.class), any(WeightGeneratorFactory.class))).then(i->{
       return EnrollmentFactory.createTrumpEnrollment((NodeID)i.getArguments()[0], weightGeneratorFactory);
     });
-    ClusterStatePersistor persistor = mock(ClusterStatePersistor.class);
+    ServerPersistentState persistor = mock(ServerPersistentState.class);
     when(persistor.isDBClean()).thenReturn(Boolean.TRUE);
-    when(persistor.getInitialState()).thenReturn(StateManager.PASSIVE_SYNCING);
+    when(persistor.getInitialMode()).thenReturn(ServerMode.SYNCING);
     StateManagerImpl mgr = new StateManagerImpl(tcLogger, groupManager, stageController, mgmtController, stageMgr, 2, 5, weightGeneratorFactory, availabilityMgr, persistor, this.topologyManager);
     mgr.initializeAndStartElection();
     Assert.assertEquals(ServerMode.INITIAL, mgr.getCurrentMode());

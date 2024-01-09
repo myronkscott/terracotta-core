@@ -27,6 +27,7 @@ import static com.tc.l2.state.StateManager.RECOVERING_STATE;
 import static com.tc.l2.state.StateManager.START_STATE;
 import static com.tc.l2.state.StateManager.STOP_STATE;
 import static com.tc.l2.state.StateManager.DIAGNOSTIC_STATE;
+import static com.tc.l2.state.StateManager.PASSIVE_RELAY;
 import com.tc.util.State;
 import java.util.EnumSet;
 import java.util.Set;
@@ -86,14 +87,50 @@ public enum ServerMode {
       return true;
     }
   },
+  RELAY(PASSIVE_RELAY) {
+    @Override
+    public boolean isStartup() {
+      return true;
+    }
+    
+    @Override
+    public boolean canStartElection() {
+      return false;
+    }
+
+    @Override
+    public boolean containsData() {
+      return false;
+    }
+
+    @Override
+    public boolean canBeActive() {
+      return false;
+    }
+
+    @Override
+    public boolean requiresElection() {
+      return false;
+    }
+  },
   ACTIVE(ACTIVE_COORDINATOR) {
     @Override
     public boolean canBeActive() {
       return true;
     }
   },
-  STOP(STOP_STATE),
-  DIAGNOSTIC(DIAGNOSTIC_STATE);
+  STOP(STOP_STATE) {
+    @Override
+    public boolean requiresElection() {
+      return false;
+    }
+  },
+  DIAGNOSTIC(DIAGNOSTIC_STATE) {
+    @Override
+    public boolean requiresElection() {
+      return false;
+    }
+  };
 
   private final State name;
 
@@ -132,6 +169,10 @@ public enum ServerMode {
 
   public boolean canStartElection() {
     return isStartup();
+  }
+  
+  public boolean requiresElection() {
+    return true;
   }
   
   public static final Set<ServerMode> VALID_STATES = EnumSet.allOf(ServerMode.class);

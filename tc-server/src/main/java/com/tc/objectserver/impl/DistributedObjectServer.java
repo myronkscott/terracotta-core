@@ -45,6 +45,8 @@ import com.tc.async.api.SEDA;
 import com.tc.async.api.Sink;
 import com.tc.async.api.Stage;
 import com.tc.async.api.StageManager;
+import com.tc.async.impl.CompoundSink;
+import com.tc.async.impl.FilterSink;
 import com.tc.async.impl.OrderedSink;
 import com.tc.async.impl.StageController;
 import com.tc.bytes.TCByteBufferFactory;
@@ -237,12 +239,17 @@ import java.util.concurrent.CompletableFuture;
 import org.terracotta.configuration.FailoverBehavior;
 import org.terracotta.server.ServerEnv;
 import com.tc.net.protocol.tcm.TCAction;
+import com.tc.objectserver.handler.RelayTransactionHandler;
+import com.tc.objectserver.persistence.ClusterPersistentState;
+import com.tc.objectserver.persistence.RelayPersistentState;
+import com.tc.objectserver.persistence.ServerPersistentState;
 import com.tc.productinfo.ProductInfo;
 import com.tc.productinfo.VersionCompatibility;
 import com.tc.util.version.CollectionVersionCompatibility;
 import com.tc.util.version.DefaultVersionCompatibility;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import org.terracotta.configuration.ConfigurationException;
 
 /**
  * Startup and shutdown point. Builds and starts the server
@@ -417,7 +424,7 @@ public class DistributedObjectServer {
     }
   }
 
-  public synchronized void bootstrap() throws IOException, LocationNotCreatedException, FileNotCreatedException {
+  public synchronized void bootstrap() throws IOException, LocationNotCreatedException, FileNotCreatedException, ConfigurationException {
     threadGroup.addCallbackOnExitDefaultHandler(new ThreadDumpHandler());
     threadGroup.addCallbackOnExitDefaultHandler((state) -> dumpOnExit());
     threadGroup.addCallbackOnExitExceptionHandler(TCServerRestartException.class, state -> {
@@ -519,7 +526,7 @@ public class DistributedObjectServer {
       }
     }
 
-    if (configuration.isPartialConfiguration()) {
+    if (configuration.isPartialConfiguration() || configuration.isRelayConfiguration()) {
       // don't persist anything for partial configurations
       persistor = new NullPersistor();
     } else {
@@ -605,6 +612,8 @@ public class DistributedObjectServer {
 
     final DSOChannelManager channelManager = new DSOChannelManagerImpl(this.l1Listener.getChannelManager(), pInfo.version());
     channelManager.addEventListener(this.connectionIdFactory);
+    
+    ServerPersistentState serverPersistentState = configuration.isRelayConfiguration() ? new RelayPersistentState() : new ClusterPersistentState(this.persistor.getClusterStatePersistor());
 
     final boolean availableMode = voteCount < 0;
     final WeightGeneratorFactory weightGeneratorFactory = new WeightGeneratorFactory();
@@ -623,7 +632,7 @@ public class DistributedObjectServer {
     final ConnectionIDWeightGenerator connectionsMade = new ConnectionIDWeightGenerator(connectionIdFactory);
     weightGeneratorFactory.add(connectionsMade);
     // 4)  InitialStateWeightGenerator - If it gets down to here, give some weight to a persistent server that went down as active
-    final InitialStateWeightGenerator initialState = new InitialStateWeightGenerator(persistor.getClusterStatePersistor());
+    final InitialStateWeightGenerator initialState = new InitialStateWeightGenerator(serverPersistentState);
     weightGeneratorFactory.add(initialState);
     // 5)  Topology weight is the number nodes this stripe believes are in the cluster
     final TopologyWeightGenerator topoWeight = new TopologyWeightGenerator(this.configSetupManager.getConfiguration());
@@ -706,12 +715,12 @@ public class DistributedObjectServer {
     HASettingsChecker haChecker = new HASettingsChecker(configSetupManager, tcProperties);
     haChecker.validateHealthCheckSettingsForHighAvailability();
 
-    StateManager state = new StateManagerImpl(DistributedObjectServer.consoleLogger, this.groupCommManager,
+    StateManager state = new StateManagerImpl(consoleLogger, this.groupCommManager,
         createStageController(processTransactionHandler), eventCollector, stageManager,
         configSetupManager.getGroupConfiguration().getNodes().size(),
         configSetupManager.getGroupConfiguration().getElectionTimeInSecs(),
         this.globalWeightGeneratorFactory, consistencyMgr,
-        this.persistor.getClusterStatePersistor(), this.topologyManager);
+        serverPersistentState, this.topologyManager);
 
     // And the stage for handling their response batching/serialization.
     Stage<Runnable> replicationResponseStage = stageManager.createStage(ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE, Runnable.class,
@@ -793,9 +802,17 @@ public class DistributedObjectServer {
     this.groupCommManager.registerForGroupEvents(dispatchHandler.createDispatcher(groupEvents.getSink()));
   //  TODO:  These stages should probably be activated and destroyed dynamically
 //  Replicated messages need to be ordered
-    Sink<ReplicationMessage> replication = new OrderedSink<>(logger, replicationStage.getSink());
-    this.groupCommManager.routeMessages(ReplicationMessage.class, replication);
-
+    RelayTransactionHandler relayHandler = new RelayTransactionHandler(replicationResponseStage, groupCommManager);
+    Stage<ReplicationMessage> relay = stageManager.createStage(ServerConfigurationContext.PASSIVE_RELAY_STAGE, ReplicationMessage.class, 
+      relayHandler.getEventHandler(), 1);
+    
+    this.groupCommManager.routeMessages(ReplicationMessage.class, 
+            new CompoundSink(
+                new FilterSink(new OrderedSink(logger, replicationStage.getSink()), c->replicationStage.isStarted()), 
+                new FilterSink(new OrderedSink(logger, relay.getSink()), c->relay.isStarted())
+            )
+    );
+    
     this.groupCommManager.routeMessages(ReplicationMessageAck.class, replicationStageAck.getSink());
     Sink<PlatformInfoRequest> info = createPlatformInformationStages(stageManager, monitoringShimService);
     dispatchHandler.addListener(connectPassiveEvents(info, monitoringShimService));
@@ -829,7 +846,7 @@ public class DistributedObjectServer {
     this.threadGroup.addCallbackOnExitExceptionHandler(GroupException.class, handler);
   }
 
-  public synchronized void openNetworkPorts() {
+  public synchronized void openNetworkPorts() throws ConfigurationException {
     Configuration configuration = this.configSetupManager.getConfiguration();
 // don't join the group if the configuration is not complete
     if (this.l2Coordinator == null) {
@@ -837,11 +854,8 @@ public class DistributedObjectServer {
     }
     if (!configuration.isPartialConfiguration()) {
       startGroupManagers();
-      this.l2Coordinator.start();
-    } else {
-      this.l2Coordinator.getStateManager().moveToDiagnosticMode();
-      TCLogging.getConsoleLogger().info("Started the server in diagnostic mode");
     }
+    this.l2Coordinator.start();
   }
 
   public CompletableFuture<Void> destroy(boolean immediate) throws Exception {
@@ -993,6 +1007,7 @@ public class DistributedObjectServer {
         ServerConfigurationContext.PASSIVE_TO_ACTIVE_DRIVER_STAGE,
         ServerConfigurationContext.PASSIVE_REPLICATION_STAGE,
         ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE,
+        ServerConfigurationContext.REQUEST_PROCESSOR_STAGE,
         ServerConfigurationContext.PASSIVE_REPLICATION_ACK_STAGE
     );
   }
@@ -1033,16 +1048,22 @@ public class DistributedObjectServer {
 
   private StageController createStageController(ProcessTransactionHandler pth) {
     StageController control = new StageController(this::getContext);
+//  PASSIVE-RELAY
+    control.addStageToState(ServerMode.RELAY.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
+    control.addStageToState(ServerMode.RELAY.getState(), ServerConfigurationContext.PASSIVE_RELAY_STAGE);
 //  PASSIVE-UNINITIALIZED handle replicate messages right away.
     // NOTE:  PASSIVE_OUTGOING_RESPONSE_STAGE must be active whenever PASSIVE_REPLICATION_STAGE is.
     control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
+    control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
 //  REPLICATION needs to continue in STANDBY so include that stage here.  SYNC also needs to be handled.
     control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
+    control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
 //  REPLICATION needs to continue in STANDBY so include that stage here. SYNC goes away
     control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
+    control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
 //  turn on the process transaction handler, the active to passive driver, and the replication ack handler, replication handler needs to be shutdown and empty for
 //  active to start
     control.addStageToState(ServerMode.ACTIVE.getState(), ServerConfigurationContext.SINGLE_THREADED_FAST_PATH);
@@ -1050,6 +1071,7 @@ public class DistributedObjectServer {
     control.addStageToState(ServerMode.ACTIVE.getState(), ServerConfigurationContext.HYDRATE_MESSAGE_STAGE);
     control.addStageToState(ServerMode.ACTIVE.getState(), ServerConfigurationContext.VOLTRON_MESSAGE_STAGE);
     control.addStageToState(ServerMode.ACTIVE.getState(), ServerConfigurationContext.RESPOND_TO_REQUEST_STAGE);
+    control.addStageToState(ServerMode.ACTIVE.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
     control.addTriggerToState(ServerMode.ACTIVE.getState(),s->{
       //  this is shimmed in to add permanent entities or load existing entities before replication and clients are active
       //  but after the active machinery is up and running

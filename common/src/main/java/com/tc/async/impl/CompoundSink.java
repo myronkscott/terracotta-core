@@ -16,17 +16,27 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-
 package com.tc.async.impl;
 
-import com.tc.async.api.EventHandler;
+import com.tc.async.api.Sink;
+import java.util.Arrays;
+import java.util.List;
 
 /**
+ *
  */
-public interface SinkFilter<EC> {
-  boolean filter(EC context);
-  
-  default EventHandler<EC> filterHandler(EventHandler<EC> handler) {
-    return handler;
+public class CompoundSink<EC> implements Sink<EC> {
+  private final List<Sink<EC>> dups;
+
+  public CompoundSink(Sink<EC>... d) {
+    this.dups = Arrays.asList(d);
   }
+  
+  @Override
+  public void addToSink(EC context) {
+    for (Sink<EC> r : dups) {
+      r.addToSink(context);
+    }
+  }
+  
 }

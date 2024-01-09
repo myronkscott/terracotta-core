@@ -16,28 +16,28 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-package com.tc.l2.ha;
+package com.tc.async.impl;
 
-import com.tc.l2.ha.WeightGeneratorFactory.WeightGenerator;
-import com.tc.l2.state.ServerMode;
-import com.tc.objectserver.persistence.ServerPersistentState;
-import com.tc.util.Assert;
+import com.tc.async.api.Sink;
+import java.util.function.Predicate;
 
-public class InitialStateWeightGenerator implements WeightGenerator {
-  private final ServerPersistentState state;
-
-  public InitialStateWeightGenerator(ServerPersistentState state) {
-    Assert.assertNotNull(state);
-    this.state = state;
+/**
+ *
+ */
+public class FilterSink<EC> implements Sink<EC> {
+  private final Sink<EC> next;
+  private final Predicate<EC> filter;
+  
+  public FilterSink(Sink<EC> next, Predicate<EC> filter) {
+    this.next = next;
+    this.filter = filter;
   }
-
+  
   @Override
-  public long getWeight() {
-    // active initially should win
-    if (ServerMode.RELAY == state.getInitialMode()) {
-      return -1;
+  public void addToSink(EC context) {
+    if (filter.test(context)) {
+      next.addToSink(context);
     }
-    return ServerMode.ACTIVE == state.getInitialMode() ? 1 : 0;
   }
-
+  
 }

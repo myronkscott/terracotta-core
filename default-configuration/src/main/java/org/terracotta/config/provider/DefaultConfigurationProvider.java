@@ -64,6 +64,7 @@ import org.terracotta.config.Server;
 import org.terracotta.config.Servers;
 import org.terracotta.config.TcProperties;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.HELP;
+import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.SERVER_NAME;
 import org.terracotta.config.service.ExtendedConfigParser;
 import org.terracotta.config.service.ServiceConfigParser;
@@ -81,7 +82,8 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
   enum Opt {
     HELP("h", "help"),
     SERVER_NAME("n", "name"),
-    CONFIG_PATH("f", "config");
+    CONFIG_PATH("f", "config"),
+    RELAY("r", "relay");
 
     String shortName;
     String longName;
@@ -112,6 +114,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
 
   private volatile String serverName;
   private volatile TcConfiguration configuration;
+  private volatile boolean relay;
 
   @Override
   public void initialize(List<String> configurationParams) throws ConfigurationException {
@@ -148,7 +151,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
 
   @Override
   public Configuration getConfiguration() {
-    return new TcConfigurationWrapper(serverName, configuration);
+    return new TcConfigurationWrapper(serverName, relay, configuration);
   }
 
   @Override
@@ -182,8 +185,10 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       ServerEnv.getServer().console(getConfigurationParamsDescription());
       throw new ConfigurationException("provided usage information");
     }
+    
+    this.relay = commandLine.hasOption(RELAY.getShortName());
 
-    serverName = commandLine.getOptionValue(SERVER_NAME.getShortName());
+    this.serverName = commandLine.getOptionValue(SERVER_NAME.getShortName());
     String cmdConfigurationFileName = commandLine.getOptionValue(CONFIG_PATH.getShortName());
     if (cmdConfigurationFileName != null && !cmdConfigurationFileName.isEmpty()) {
       Path path = Paths.get(cmdConfigurationFileName);
@@ -252,17 +257,27 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
               .desc("print usage information")
               .build()
     );
-
+    options.addOption(
+        Option.builder(RELAY.getShortName())
+              .longOpt(RELAY.getLongName())
+              .desc("start in replication mode")
+              .build()
+    );
     return options;
   }
   
   public static class TcConfigurationWrapper implements Configuration, PrettyPrintable {
     private final String serverName;
     private final TcConfiguration  configuration;
+    private final int reconnect;
+    private final boolean relay;
+    
 
-    public TcConfigurationWrapper(String serverName, TcConfiguration configuration) {
+    public TcConfigurationWrapper(String serverName, boolean relay, TcConfiguration configuration) {
       this.serverName = serverName;
       this.configuration = configuration;
+      this.reconnect = configuration.getPlatformConfiguration().getServers().getClientReconnectWindow();
+      this.relay = relay;
     }
 
     @Override
@@ -274,13 +289,12 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       } else {
         defaultServer = getDefaultServer(servers);
       }
-      return new ServerConfigurationImpl(defaultServer, servers.getClientReconnectWindow());
+      return new ServerConfigurationImpl(defaultServer, reconnect);
     }
 
     @Override
     public List<ServerConfiguration> getServerConfigurations() {
       Servers servers = configuration.getPlatformConfiguration().getServers();
-      int reconnect = servers.getClientReconnectWindow();
       List<Server> list = servers.getServer();
       List<ServerConfiguration> configs = new ArrayList<>(list.size());
       list.forEach(s->configs.add(new ServerConfigurationImpl(s, reconnect)));
@@ -405,6 +419,13 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       }
       return localAddresses;
     }
+
+    @Override
+    public boolean isRelayConfiguration() {
+      return relay;
+    }
+    
+    
   }
   
   private static Server findServer(Servers servers, String serverName) throws ConfigurationException {

@@ -97,6 +97,11 @@ public class TestStateManager implements StateManager {
   public void moveToDiagnosticMode() {
 
   }
+  
+  @Override
+  public void moveToRelayMode() {
+
+  }  
 
   @Override
   public boolean moveToStopStateIf(Set<ServerMode> validStates) {

@@ -45,4 +45,8 @@ public interface Configuration {
   default boolean isPartialConfiguration() {
     return false;
   }
+  
+  default boolean isRelayConfiguration() {
+    return false;
+  }
 }

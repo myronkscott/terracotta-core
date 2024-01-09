@@ -16,28 +16,35 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-package com.tc.l2.ha;
+package com.tc.objectserver.persistence;
 
-import com.tc.l2.ha.WeightGeneratorFactory.WeightGenerator;
 import com.tc.l2.state.ServerMode;
-import com.tc.objectserver.persistence.ServerPersistentState;
-import com.tc.util.Assert;
+import com.tc.l2.state.StateManager;
 
-public class InitialStateWeightGenerator implements WeightGenerator {
-  private final ServerPersistentState state;
+/**
+ *
+ */
+public class ClusterPersistentState implements ServerPersistentState {
+  
+  private final ClusterStatePersistor persistor;
 
-  public InitialStateWeightGenerator(ServerPersistentState state) {
-    Assert.assertNotNull(state);
-    this.state = state;
+  public ClusterPersistentState(ClusterStatePersistor persistor) {
+    this.persistor = persistor;
   }
 
   @Override
-  public long getWeight() {
-    // active initially should win
-    if (ServerMode.RELAY == state.getInitialMode()) {
-      return -1;
-    }
-    return ServerMode.ACTIVE == state.getInitialMode() ? 1 : 0;
+  public boolean isDBClean() {
+    return persistor.isDBClean();
   }
 
+  @Override
+  public void setDBClean(boolean clean) {
+    persistor.setDBClean(clean);
+  }
+
+  @Override
+  public ServerMode getInitialMode() {
+    return StateManager.convert(persistor.getInitialState());
+  }
+  
 }

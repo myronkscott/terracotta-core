@@ -32,6 +32,7 @@ import com.tc.l2.ha.WeightGeneratorFactory;
 import com.tc.l2.msg.L2StateMessage;
 import static com.tc.l2.state.ServerMode.ACTIVE;
 import static com.tc.l2.state.ServerMode.DIAGNOSTIC;
+import static com.tc.l2.state.ServerMode.RELAY;
 import static com.tc.l2.state.ServerMode.STOP;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
@@ -43,7 +44,6 @@ import com.tc.objectserver.core.api.ServerConfigurationContext;
 import com.tc.objectserver.core.impl.ManagementTopologyEventCollector;
 import com.tc.objectserver.impl.Topology;
 import com.tc.objectserver.impl.TopologyManager;
-import com.tc.objectserver.persistence.ClusterStatePersistor;
 import com.tc.util.Assert;
 import com.tc.util.State;
 
@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.terracotta.server.ServerEnv;
 import org.terracotta.tripwire.TripwireFactory;
+import com.tc.objectserver.persistence.ServerPersistentState;
 
 
 public class StateManagerImpl implements StateManager {
@@ -75,7 +76,7 @@ public class StateManagerImpl implements StateManager {
   // Used to determine whether or not the L2HACoordinator has started up and told us to start (it puts us into the
   //  started state - startElection()).
   private boolean didStartElection;
-  private final ClusterStatePersistor  clusterStatePersistor;
+  private final ServerPersistentState  clusterStatePersistor;
 
   private NodeID                       activeNode          = ServerID.NULL_ID;
   private NodeID                       syncedTo          = ServerID.NULL_ID;
@@ -89,7 +90,7 @@ public class StateManagerImpl implements StateManager {
                           StageController controller, ManagementTopologyEventCollector eventCollector, StageManager mgr,
                           int expectedServers, int electionTimeInSec, WeightGeneratorFactory weightFactory,
                           ConsistencyManager availabilityMgr,
-                          ClusterStatePersistor clusterStatePersistor, TopologyManager topologyManager) {
+                          ServerPersistentState serverPersitenceState, TopologyManager topologyManager) {
     this.consoleLogger = consoleLogger;
     this.groupManager = groupManager;
     this.stateChangeSink = controller;
@@ -100,8 +101,8 @@ public class StateManagerImpl implements StateManager {
     this.electionMgr = new ElectionManagerImpl(groupManager, electionTimeInSec);
     this.electionSink = mgr.createStage(ServerConfigurationContext.L2_STATE_ELECTION_HANDLER, ElectionContext.class, this.electionMgr.getEventHandler(), 1, 1024, false, false).getSink();
     this.publishSink = mgr.createStage(ServerConfigurationContext.L2_STATE_CHANGE_STAGE, StateChangedEvent.class, EventHandler.consumer(this::publishStateChange), 1, 1024, false, false).getSink();
-    this.clusterStatePersistor = clusterStatePersistor;
-    this.startState = StateManager.convert(clusterStatePersistor.getInitialState());
+    this.clusterStatePersistor = serverPersitenceState;
+    this.startState = serverPersitenceState.getInitialMode();
   }
 
   @Override
@@ -230,7 +231,7 @@ public class StateManagerImpl implements StateManager {
         boolean rerun = false;
         if (nodeid == myNodeID) {
           debugInfo("Won Election, moving to active state. myNodeID/winner=" + myNodeID);
-          if (getCurrentMode().canBeActive() && clusterStatePersistor.isDBClean() && 
+          if (startState != ServerMode.RELAY && getCurrentMode().canBeActive() && clusterStatePersistor.isDBClean() && 
               this.availabilityMgr.requestTransition(this.state, nodeid, lockedTopology, ConsistencyManager.Transition.MOVE_TO_ACTIVE)) {
             moveToActiveState(electionMgr.passiveStandbys(), lockedTopology);
           } else {
@@ -333,37 +334,43 @@ public class StateManagerImpl implements StateManager {
       return;
     }
     
-    logger.info("moving to passive ready " + state + " " + src + " " + active);
-    logger.info("verification = {}", getVerificationEnrollment());
     if (startState.containsData()) {
       // in this case, a passive cannot be added to a running cluster with data.  zap and restart
       zapAndResyncLocalNode("server contains stale data.");
       return;
     }
-    ServerMode newState = (!winningEnrollment.getNodeID().isNull() && getVerificationEnrollment().equals(winningEnrollment)) ? 
-            ServerMode.PASSIVE : ServerMode.UNINITIALIZED;
-    Set<ServerMode> modes = newState == ServerMode.UNINITIALIZED ? EnumSet.of(ServerMode.INITIAL, ServerMode.START,ServerMode.UNINITIALIZED) :
-            EnumSet.of(ServerMode.PASSIVE);
-    try {
-      setActiveNodeID(active);
-      ServerMode oldState = switchToState(newState, modes);
-      switch (oldState) {
-        case INITIAL:
-        case START:
-          Assert.assertEquals(ServerMode.UNINITIALIZED, newState);
-          break;
-        case UNINITIALIZED:
-          Assert.assertEquals(ServerMode.UNINITIALIZED, newState);
-          // double election, ignore
-          break;
-        case PASSIVE:
-          Assert.assertEquals(ServerMode.PASSIVE, newState);
-          break;
-        default:
-          throw new IllegalStateException(state + " at move to passive ready");
+    
+    setActiveNodeID(active);
+    if (startState == ServerMode.RELAY) {
+      switchToState(ServerMode.RELAY, EnumSet.of(ServerMode.INITIAL, ServerMode.START, ServerMode.RELAY));
+    } else {
+      logger.info("moving to passive " + state + " " + src + " " + active);
+      logger.info("verification = {}", getVerificationEnrollment());
+    
+      ServerMode newState = (!winningEnrollment.getNodeID().isNull() && getVerificationEnrollment().equals(winningEnrollment)) ? 
+              ServerMode.PASSIVE : ServerMode.UNINITIALIZED;
+      Set<ServerMode> modes = newState == ServerMode.UNINITIALIZED ? EnumSet.of(ServerMode.INITIAL, ServerMode.START,ServerMode.UNINITIALIZED) :
+              EnumSet.of(ServerMode.PASSIVE);
+      try {
+        ServerMode oldState = switchToState(newState, modes);
+        switch (oldState) {
+          case INITIAL:
+          case START:
+            Assert.assertEquals(ServerMode.UNINITIALIZED, newState);
+            break;
+          case UNINITIALIZED:
+            Assert.assertEquals(ServerMode.UNINITIALIZED, newState);
+            // double election, ignore
+            break;
+          case PASSIVE:
+            Assert.assertEquals(ServerMode.PASSIVE, newState);
+            break;
+          default:
+            throw new IllegalStateException(state + " at move to passive ready");
+        }
+      } catch (IllegalStateException state) {
+        zapAndResyncLocalNode(state.getMessage());
       }
-    } catch (IllegalStateException state) {
-      zapAndResyncLocalNode(state.getMessage());
     }
   }
   
@@ -387,12 +394,17 @@ public class StateManagerImpl implements StateManager {
   public void moveToStopState() {
       switchToState(ServerMode.STOP, EnumSet.allOf(ServerMode.class));
   }
-
+  
   @Override
   public void moveToDiagnosticMode() {
       switchToState(ServerMode.DIAGNOSTIC, EnumSet.of(ServerMode.INITIAL));
   }
-
+  
+  @Override
+  public void moveToRelayMode() {
+      switchToState(ServerMode.RELAY, EnumSet.of(ServerMode.INITIAL, ServerMode.RELAY));
+  }
+  
   private void moveToStartStateIfBootstrapping() {
     try {
       if (getCurrentMode() == ServerMode.INITIAL) {
@@ -428,15 +440,15 @@ public class StateManagerImpl implements StateManager {
   }
   
   private synchronized ServerMode switchToState(ServerMode newState, Set<ServerMode> validOldStates) throws IllegalStateException {
-    if (!EnumSet.of(DIAGNOSTIC, STOP).contains(newState)) {
+    if (newState.requiresElection()) {
       synchronizedWaitForStart();
     }
     if (!validOldStates.contains(state)) {
       throw new IllegalStateException("Cant move to " + newState + " from " + state + " valid states " + validOldStates);
     }
     try {
-      logger.debug("Switching to " + newState);
       if (state != newState) {
+        logger.debug("Switching to " + newState);
         TripwireFactory.createServerStateEvent(newState.toString(), ACTIVE == newState).commit();
         publishSink.addToSink(new StateChangedEvent(state.getState(), newState.getState()));
       }
@@ -702,9 +714,7 @@ public class StateManagerImpl implements StateManager {
 
   @Override
   public void startElectionIfNecessary(NodeID disconnectedNode) {
-    synchronized (this) {
-      synchronizedWaitForStart();
-    }
+    synchronizedWaitForStart();
     Assert.assertFalse(disconnectedNode.equals(getLocalNodeID()));
     boolean elect = false;
     
@@ -791,7 +801,7 @@ public class StateManagerImpl implements StateManager {
    * which notify it when messages arrive.
    */
   private void synchronizedWaitForStart() {
-    while (!this.didStartElection) {
+    while (!this.didStartElection && this.state.isStartup()) {
       try {
         wait();
       } catch (InterruptedException e) {
