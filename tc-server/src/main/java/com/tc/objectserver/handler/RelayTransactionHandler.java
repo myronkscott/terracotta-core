@@ -28,6 +28,8 @@ import com.tc.objectserver.entity.MessagePayload;
 import com.tc.l2.msg.ReplicationMessage;
 import com.tc.l2.msg.ReplicationResultCode;
 import com.tc.l2.msg.SyncReplicationActivity;
+import com.tc.l2.state.StateManager;
+import com.tc.net.NodeID;
 import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
 import com.tc.net.groups.GroupManager;
@@ -44,6 +46,10 @@ public class RelayTransactionHandler {
 
   private final PassiveAckSender ackSender;
   private volatile long currentSequence = 0;
+  private StateManager stateMgr;
+  private NodeID endTarget;
+  
+  
 
   public long getCurrentSequence() {
     return currentSequence;
@@ -69,9 +75,21 @@ public class RelayTransactionHandler {
     @Override
     protected void initialize(ConfigurationContext context) {
       ServerConfigurationContext scxt = (ServerConfigurationContext)context;
-//      ackSender.requestPassiveSync(scxt.getL2Coordinator().getStateManager().getActiveNodeID());
+      stateMgr = scxt.getL2Coordinator().getStateManager();
     } 
   };
+  
+  public boolean registerRelayConsumer(NodeID node) {
+    NodeID active = stateMgr.getActiveNodeID();
+    LOGGER.info("remote node connected for duplication {}", node);
+    if (!active.isNull()) {
+      ackSender.requestPassiveSync(stateMgr.getActiveNodeID());
+      endTarget = node;
+      return true;
+    } else {
+      return false;
+    }
+  }
 
   public EventHandler<ReplicationMessage> getEventHandler() {
     return eventHorizon;

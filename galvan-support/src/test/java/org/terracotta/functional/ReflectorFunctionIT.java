@@ -51,7 +51,6 @@ public class ReflectorFunctionIT {
                     def.add(args.next());
                   }
                 }
-                def.add("-r");
               } else {
                 def.addAll(Arrays.asList(super.build()));
               }

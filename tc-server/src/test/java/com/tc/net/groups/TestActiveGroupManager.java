@@ -23,6 +23,7 @@ import com.tc.config.GroupConfiguration;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
 import com.tc.net.core.TCConnectionManager;
+import com.tc.net.protocol.tcm.ChannelEventListener;
 import com.tc.util.Assert;
 import com.tc.util.UUID;
 import java.util.Collections;
@@ -64,6 +65,11 @@ public class TestActiveGroupManager implements GroupManager<GroupMessage> {
   @Override
   public NodeID join(GroupConfiguration groupConfiguration) {
     throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public NodeID directedJoin(String location, ChannelEventListener listener) throws GroupException {
+    throw new UnsupportedOperationException("Not supported yet."); 
   }
 
   @Override

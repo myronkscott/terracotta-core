@@ -200,7 +200,7 @@ limitations under the License.
             <kitTestDirectory>${project.build.testOutputDirectory}/testing_directory</kitTestDirectory>
             <logback.debug>true</logback.debug>
             <com.tc.tcm.monitor.enabled>true</com.tc.tcm.monitor.enabled>
-            <serverDebugPortStart>9000</serverDebugPortStart>
+            <!--serverDebugPortStart>9000</serverDebugPortStart-->
           </systemPropertyVariables>
         </configuration>
       </plugin>

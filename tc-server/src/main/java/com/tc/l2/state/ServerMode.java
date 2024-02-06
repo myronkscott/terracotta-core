@@ -27,6 +27,7 @@ import static com.tc.l2.state.StateManager.RECOVERING_STATE;
 import static com.tc.l2.state.StateManager.START_STATE;
 import static com.tc.l2.state.StateManager.STOP_STATE;
 import static com.tc.l2.state.StateManager.DIAGNOSTIC_STATE;
+import static com.tc.l2.state.StateManager.PASSIVE_DUPLICATE;
 import static com.tc.l2.state.StateManager.PASSIVE_RELAY;
 import com.tc.util.State;
 import java.util.EnumSet;
@@ -176,5 +177,5 @@ public enum ServerMode {
   }
   
   public static final Set<ServerMode> VALID_STATES = EnumSet.allOf(ServerMode.class);
-  public static final Set<ServerMode> PASSIVE_STATES = EnumSet.of(UNINITIALIZED, PASSIVE, SYNCING);
+  public static final Set<ServerMode> PASSIVE_STATES = EnumSet.of(UNINITIALIZED, PASSIVE, SYNCING, RELAY);
 };

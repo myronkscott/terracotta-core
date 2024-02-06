@@ -20,6 +20,7 @@ package com.tc.objectserver.impl;
 
 import com.tc.async.api.AbstractEventHandler;
 import com.tc.async.api.ConfigurationContext;
+import com.tc.async.api.EventHandler;
 import com.tc.async.api.EventHandlerException;
 
 import com.tc.config.ServerConfigurationManager;
@@ -45,8 +46,6 @@ import com.tc.async.api.SEDA;
 import com.tc.async.api.Sink;
 import com.tc.async.api.Stage;
 import com.tc.async.api.StageManager;
-import com.tc.async.impl.CompoundSink;
-import com.tc.async.impl.FilterSink;
 import com.tc.async.impl.OrderedSink;
 import com.tc.async.impl.StageController;
 import com.tc.bytes.TCByteBufferFactory;
@@ -69,6 +68,7 @@ import com.tc.handler.CallbackZapServerNodeExceptionAdapter;
 import com.tc.l2.api.L2Coordinator;
 import com.tc.l2.api.ReplicatedClusterStateManager;
 import com.tc.l2.context.StateChangedEvent;
+import com.tc.l2.dup.RelayMessage;
 import com.tc.l2.ha.BlockTimeWeightGenerator;
 import com.tc.l2.ha.ChannelWeightGenerator;
 import com.tc.l2.ha.ConnectionIDWeightGenerator;
@@ -205,6 +205,9 @@ import com.tc.net.core.CachingClearTextBufferManagerFactory;
 import com.tc.net.core.DefaultBufferManagerFactory;
 import com.tc.net.core.TCConnectionManager;
 import com.tc.net.core.TCConnectionManagerImpl;
+import com.tc.net.protocol.tcm.ChannelEvent;
+import com.tc.net.protocol.tcm.ChannelEventListener;
+import static com.tc.net.protocol.tcm.ChannelEventType.CHANNEL_OPENED_EVENT;
 import com.tc.net.protocol.tcm.HydrateContext;
 import com.tc.net.protocol.tcm.HydrateHandler;
 import com.tc.net.protocol.tcm.MessageChannel;
@@ -239,6 +242,7 @@ import java.util.concurrent.CompletableFuture;
 import org.terracotta.configuration.FailoverBehavior;
 import org.terracotta.server.ServerEnv;
 import com.tc.net.protocol.tcm.TCAction;
+import com.tc.objectserver.handler.DuplicationTransactionHandler;
 import com.tc.objectserver.handler.RelayTransactionHandler;
 import com.tc.objectserver.persistence.ClusterPersistentState;
 import com.tc.objectserver.persistence.RelayPersistentState;
@@ -726,11 +730,19 @@ public class DistributedObjectServer {
     Stage<Runnable> replicationResponseStage = stageManager.createStage(ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE, Runnable.class,
         new GenericHandler<>(), 1);
 //  routing for passive to receive replication
-    ReplicatedTransactionHandler replicatedTransactionHandler = new ReplicatedTransactionHandler(state, replicationResponseStage, this.persistor, entityManager, groupCommManager);
-    sequenceWeight.setReplicatedTransactionHandler(replicatedTransactionHandler);
+    EventHandler<ReplicationMessage> replicationEvents = null;
+    if (configSetupManager.getConfiguration().isRelayConfiguration()) {
+      replicationEvents = createAndRouteRelayTransactionHandler(replicationResponseStage);
+    } else {
+      ReplicatedTransactionHandler replicatedTransactionHandler = new ReplicatedTransactionHandler(state, replicationResponseStage, this.persistor, entityManager, groupCommManager);
+      sequenceWeight.setReplicatedTransactionHandler(replicatedTransactionHandler);
+      replicationEvents = replicatedTransactionHandler.getEventHandler();
+      routeRelayMessages(configSetupManager.getConfiguration());
+    }
+    
 // This requires both the stage for handling the replication/sync messages.
     Stage<ReplicationMessage> replicationStage = stageManager.createStage(ServerConfigurationContext.PASSIVE_REPLICATION_STAGE, ReplicationMessage.class,
-        replicatedTransactionHandler.getEventHandler(), 1);
+        replicationEvents, 1);
 
     final ClientChannelLifeCycleHandler channelLifeCycleHandler = new ClientChannelLifeCycleHandler(this.communicationsManager,
                                                                                         stageManager, channelManager,
@@ -802,16 +814,8 @@ public class DistributedObjectServer {
     this.groupCommManager.registerForGroupEvents(dispatchHandler.createDispatcher(groupEvents.getSink()));
   //  TODO:  These stages should probably be activated and destroyed dynamically
 //  Replicated messages need to be ordered
-    RelayTransactionHandler relayHandler = new RelayTransactionHandler(replicationResponseStage, groupCommManager);
-    Stage<ReplicationMessage> relay = stageManager.createStage(ServerConfigurationContext.PASSIVE_RELAY_STAGE, ReplicationMessage.class, 
-      relayHandler.getEventHandler(), 1);
     
-    this.groupCommManager.routeMessages(ReplicationMessage.class, 
-            new CompoundSink(
-                new FilterSink(new OrderedSink(logger, replicationStage.getSink()), c->replicationStage.isStarted()), 
-                new FilterSink(new OrderedSink(logger, relay.getSink()), c->relay.isStarted())
-            )
-    );
+    this.groupCommManager.routeMessages(ReplicationMessage.class,new OrderedSink<>(logger, replicationStage.getSink()));
     
     this.groupCommManager.routeMessages(ReplicationMessageAck.class, replicationStageAck.getSink());
     Sink<PlatformInfoRequest> info = createPlatformInformationStages(stageManager, monitoringShimService);
@@ -827,7 +831,7 @@ public class DistributedObjectServer {
         pInfo,
         consoleLogger
     );
-
+    
     this.context = this.serverBuilder.createServerConfigurationContext(configSetupManager.getServerConfiguration().getName(), stageManager, channelManager,
                                                                        channelStats, this.l2Coordinator,
                                                                        clientHandshakeManager,
@@ -1006,6 +1010,8 @@ public class DistributedObjectServer {
         ServerConfigurationContext.ACTIVE_TO_PASSIVE_DRIVER_FLUSH_STAGE,
         ServerConfigurationContext.PASSIVE_TO_ACTIVE_DRIVER_STAGE,
         ServerConfigurationContext.PASSIVE_REPLICATION_STAGE,
+        ServerConfigurationContext.PASSIVE_DUPLICATE_STAGE,
+        ServerConfigurationContext.PASSIVE_RELAY_STAGE,
         ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE,
         ServerConfigurationContext.REQUEST_PROCESSOR_STAGE,
         ServerConfigurationContext.PASSIVE_REPLICATION_ACK_STAGE
@@ -1051,16 +1057,20 @@ public class DistributedObjectServer {
 //  PASSIVE-RELAY
     control.addStageToState(ServerMode.RELAY.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
     control.addStageToState(ServerMode.RELAY.getState(), ServerConfigurationContext.PASSIVE_RELAY_STAGE);
+    control.addStageToState(ServerMode.RELAY.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
 //  PASSIVE-UNINITIALIZED handle replicate messages right away.
     // NOTE:  PASSIVE_OUTGOING_RESPONSE_STAGE must be active whenever PASSIVE_REPLICATION_STAGE is.
+    control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.PASSIVE_DUPLICATE_STAGE);
     control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
     control.addStageToState(ServerMode.UNINITIALIZED.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
 //  REPLICATION needs to continue in STANDBY so include that stage here.  SYNC also needs to be handled.
+    control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.PASSIVE_DUPLICATE_STAGE);
     control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
     control.addStageToState(ServerMode.SYNCING.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
 //  REPLICATION needs to continue in STANDBY so include that stage here. SYNC goes away
+    control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.PASSIVE_DUPLICATE_STAGE);
     control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.PASSIVE_REPLICATION_STAGE);
     control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.PASSIVE_OUTGOING_RESPONSE_STAGE);
     control.addStageToState(ServerMode.PASSIVE.getState(), ServerConfigurationContext.REQUEST_PROCESSOR_STAGE);
@@ -1157,13 +1167,19 @@ public class DistributedObjectServer {
       }
     });
   }
-
+  
   private void startGroupManagers() {
     try {
       if (this.groupCommManager == null) {
         throw new IllegalStateException("server is not bootstrapped");
       }
-      final NodeID myNodeId = this.groupCommManager.join(this.configSetupManager.getGroupConfiguration());
+      NodeID myNodeId;
+      String relayLocation = this.configSetupManager.getConfiguration().getRelayLocation();
+      if (relayLocation != null) {
+        myNodeId = this.groupCommManager.join(this.configSetupManager.getGroupConfiguration().directConnect(relayLocation));
+      } else {
+        myNodeId = this.groupCommManager.join(this.configSetupManager.getGroupConfiguration());
+      }
       logger.info("This L2 Node ID = " + myNodeId);
     } catch (final GroupException e) {
       logger.error("Caught Exception :", e);
@@ -1367,5 +1383,28 @@ public class DistributedObjectServer {
 
   public Persistor getPersistor() {
     return persistor;
+  }
+    
+  private EventHandler<ReplicationMessage> createAndRouteRelayTransactionHandler(Stage<Runnable> current) {
+    RelayTransactionHandler handler = new RelayTransactionHandler(current, groupCommManager);
+    Stage<RelayMessage> relays = this.seda.getStageManager().createStage(ServerConfigurationContext.PASSIVE_RELAY_STAGE, RelayMessage.class, new AbstractEventHandler<RelayMessage>() {
+      @Override
+      public void handleEvent(RelayMessage context) throws EventHandlerException {
+        if (context.getType() == RelayMessage.START_SYNC) {
+          if (!handler.registerRelayConsumer(context.messageFrom())) {
+            groupCommManager.closeMember(context.messageFrom());
+          }
+        }
+      }
+    }, 1);
+    this.groupCommManager.routeMessages(RelayMessage.class, relays.getSink());
+    return handler.getEventHandler();
+  }
+  
+  private void routeRelayMessages(Configuration config) {
+    Stage<ReplicationMessage> next = this.seda.getStageManager().getStage(ServerConfigurationContext.PASSIVE_REPLICATION_STAGE, ReplicationMessage.class);
+    DuplicationTransactionHandler handler = new DuplicationTransactionHandler(n->config.getRelayLocation() != null, next, groupCommManager);
+    Stage<RelayMessage> relays = this.seda.getStageManager().createStage(ServerConfigurationContext.PASSIVE_DUPLICATE_STAGE, RelayMessage.class, handler.getEventHandler(), 1);
+    this.groupCommManager.routeMessages(RelayMessage.class, relays.getSink());
   }
 }

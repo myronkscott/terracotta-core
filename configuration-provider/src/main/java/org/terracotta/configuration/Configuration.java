@@ -49,4 +49,8 @@ public interface Configuration {
   default boolean isRelayConfiguration() {
     return false;
   }
+  
+  default String getRelayLocation() {
+    return null;
+  }
 }

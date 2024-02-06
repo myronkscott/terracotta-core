@@ -46,8 +46,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.terracotta.server.ServerEnv;
 
-public class TCGroupMemberDiscoveryStatic implements TCGroupMemberDiscovery {
-  private static final Logger logger = LoggerFactory.getLogger(TCGroupMemberDiscoveryStatic.class);
+public class TCGroupMemberDiscoveryDynamic implements TCGroupMemberDiscovery {
+  private static final Logger logger = LoggerFactory.getLogger(TCGroupMemberDiscoveryDynamic.class);
   private final static long                        DISCOVERY_INTERVAL_MS;
   static {
     DISCOVERY_INTERVAL_MS = TCPropertiesImpl.getProperties()
@@ -62,7 +62,7 @@ public class TCGroupMemberDiscoveryStatic implements TCGroupMemberDiscovery {
   private int                                  joinedNodes             = 0;
   private final HashSet<String>                    nodeThreadConnectingSet = new HashSet<>();
 
-  public TCGroupMemberDiscoveryStatic(TCGroupManagerImpl manager, Node local) {
+  public TCGroupMemberDiscoveryDynamic(TCGroupManagerImpl manager, Node local) {
     this.manager = manager;
     this.local = local;
   }
@@ -70,6 +70,8 @@ public class TCGroupMemberDiscoveryStatic implements TCGroupMemberDiscovery {
   @Override
   public void setupNodes(Node local, Set<Node> nodes) {
     Assert.assertEquals(this.local, local);
+
+    nodeStateMap.clear();
     for (Node node : nodes) {
       DiscoveryStateMachine stateMachine = new DiscoveryStateMachine(node);
       DiscoveryStateMachine old = nodeStateMap.put(getNodeName(node), stateMachine);
@@ -277,22 +279,16 @@ public class TCGroupMemberDiscoveryStatic implements TCGroupMemberDiscovery {
   @Override
   public synchronized void nodeJoined(NodeID nodeID) {
     String nodeName = ((ServerID) nodeID).getName();
-    DiscoveryStateMachine n = nodeStateMap.get(nodeName);
-    if (n != null) {
-      n.nodeJoined();
-      joinedNodes++;
-    }
+    nodeStateMap.get(nodeName).nodeJoined();
+    joinedNodes++;
   }
 
   @Override
   public synchronized void nodeLeft(NodeID nodeID) {
+    joinedNodes--;
     String nodeName = ((ServerID) nodeID).getName();
-    DiscoveryStateMachine n = nodeStateMap.get(nodeName);
-    if (n != null) {
-      joinedNodes--;
-      nodeStateMap.get(nodeName).nodeLeft();
-      notifyAll();
-    }
+    nodeStateMap.get(nodeName).nodeLeft();
+    notifyAll();
   }
 
   public synchronized Set<Node> pauseDiscovery() {

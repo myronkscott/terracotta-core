@@ -116,6 +116,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
   private final Supplier<Set<Node>>                         configuredNodes;
   
   private final String                                      version;
+  private final boolean                                     validateNodes;
   private final ServerID                                    thisNodeID;
   private final int                                         groupPort;
   private final ConnectionPolicy                            connectionPolicy;
@@ -163,7 +164,15 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
     this.thisNodeID = thisNodeID;
     this.bufferManagerFactory = bufferManagerFactory;
     this.version = configSetupManager.getProductInfo().version();
-    this.configuredNodes = ()->configSetupManager.getGroupConfiguration().getNodes();
+    this.validateNodes = !configSetupManager.getConfiguration().isRelayConfiguration() && configSetupManager.getConfiguration().getRelayLocation() == null;
+    this.configuredNodes = ()-> {
+      String relay = configSetupManager.getConfiguration().getRelayLocation();
+      if (relay != null) {
+        return configSetupManager.getGroupConfiguration().directConnect(relay).getNodes();
+      } else {
+        return configSetupManager.getGroupConfiguration().getNodes();
+      }
+    };
 
     ServerConfiguration l2DSOConfig = configSetupManager.getServerConfiguration();
     serverCount = configSetupManager.allCurrentlyKnownServers().length;
@@ -204,7 +213,8 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
     this.configuredNodes = ()->new HashSet<>(Arrays.asList(servers));
 
     this.groupPort = groupPort;
-    this.version = getVersion();
+    this.validateNodes = true;
+    this.version = "UNKNOWN";
     this.weightGeneratorFactory = weightGenerator;
     this.serverCount = 0;
     thisNodeID = new ServerID(new Node(hostname, port).getServerNodeName(), UUID.getUUID().toString().getBytes());
@@ -415,6 +425,19 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
     } else {
       return false;
     }
+  }
+  
+  @Override
+  public NodeID directedJoin(String target, ChannelEventListener listener) throws GroupException {
+    String[] hostPort = target.split("[:]");
+    
+    try {
+      openChannel(hostPort[0], Integer.parseInt(hostPort[1]), listener);
+    } catch (CommStackMismatchException | IOException | MaxConnectionsExceededException | NumberFormatException | TCTimeoutException e) {
+      throw new GroupException(e);
+    }
+    
+    return getNodeID();
   }
 
   @Override
@@ -973,7 +996,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
       if (isDebugLogging()) {
         debugInfo("Creating handshake state machine for channel: " + channel);
       }
-      stateMachine = new TCGroupHandshakeStateMachine(this, channel, getNodeID(), weightGeneratorFactory, version);
+      stateMachine = new TCGroupHandshakeStateMachine(this, channel, getNodeID(), weightGeneratorFactory, validateNodes, version);
       channel.addAttachment(HANDSHAKE_STATE_MACHINE_TAG, stateMachine, false);
       channel.addListener(new HandshakeChannelEventListener(stateMachine));
       if (channel.isOpen()) {
@@ -1034,6 +1057,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
     private final MessageChannel     channel;
     private final ServerID           localNodeID;
     private final WeightGeneratorFactory weightGeneratorFactory;
+    private final boolean             validateNodes;
     private final String               version;
 
     private HandshakeMonitor         current;
@@ -1042,11 +1066,12 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
     private TCGroupMember            member;
 
     public TCGroupHandshakeStateMachine(TCGroupManagerImpl manager, MessageChannel channel, ServerID localNodeID,
-                                        WeightGeneratorFactory weightGeneratorFactory, String version) {
+                                        WeightGeneratorFactory weightGeneratorFactory, boolean validateNodes, String version) {
       this.manager = manager;
       this.channel = channel;
       this.localNodeID = localNodeID;
       this.weightGeneratorFactory = weightGeneratorFactory;
+      this.validateNodes = validateNodes;
       this.version = version;
       this.current = STATE_NEW.createMonitor();
       this.current.complete();
@@ -1258,7 +1283,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
       @Override
       public void execute(TCGroupHandshakeMessage msg) {
         setPeerNodeID(msg);
-        if (!manager.getDiscover().isValidClusterNode(peerNodeID)) {
+        if (!manager.getDiscover().isValidClusterNode(peerNodeID) && validateNodes) {
           logger.warn("Drop connection from non-member node " + peerNodeID);
           switchToState(STATE_FAILURE);
           return;

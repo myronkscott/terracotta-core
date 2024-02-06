@@ -63,6 +63,7 @@ import org.terracotta.config.Property;
 import org.terracotta.config.Server;
 import org.terracotta.config.Servers;
 import org.terracotta.config.TcProperties;
+import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.DUPLICATE;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.HELP;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.SERVER_NAME;
@@ -83,7 +84,8 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     HELP("h", "help"),
     SERVER_NAME("n", "name"),
     CONFIG_PATH("f", "config"),
-    RELAY("r", "relay");
+    RELAY("r", "relay"),
+    DUPLICATE("d", "duplicate");
 
     String shortName;
     String longName;
@@ -115,6 +117,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
   private volatile String serverName;
   private volatile TcConfiguration configuration;
   private volatile boolean relay;
+  private volatile String relayLocation;
 
   @Override
   public void initialize(List<String> configurationParams) throws ConfigurationException {
@@ -151,7 +154,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
 
   @Override
   public Configuration getConfiguration() {
-    return new TcConfigurationWrapper(serverName, relay, configuration);
+    return new TcConfigurationWrapper(serverName, relay, relayLocation, configuration);
   }
 
   @Override
@@ -187,6 +190,9 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     }
     
     this.relay = commandLine.hasOption(RELAY.getShortName());
+    if (commandLine.hasOption(DUPLICATE.getShortName())) {
+      this.relayLocation = commandLine.getOptionValue(DUPLICATE.getShortName(), null);
+    }
 
     this.serverName = commandLine.getOptionValue(SERVER_NAME.getShortName());
     String cmdConfigurationFileName = commandLine.getOptionValue(CONFIG_PATH.getShortName());
@@ -260,7 +266,15 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     options.addOption(
         Option.builder(RELAY.getShortName())
               .longOpt(RELAY.getLongName())
-              .desc("start in replication mode")
+              .desc("start in relay mode")
+              .build()
+    );
+    options.addOption(
+        Option.builder(DUPLICATE.getShortName())
+              .longOpt(DUPLICATE.getLongName())
+              .hasArg()
+              .argName("relay-address")
+              .desc("start in duplicate mode")
               .build()
     );
     return options;
@@ -271,13 +285,14 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     private final TcConfiguration  configuration;
     private final int reconnect;
     private final boolean relay;
-    
+    private final String relayLocation;
 
-    public TcConfigurationWrapper(String serverName, boolean relay, TcConfiguration configuration) {
+    public TcConfigurationWrapper(String serverName, boolean relay, String relayLocation, TcConfiguration configuration) {
       this.serverName = serverName;
       this.configuration = configuration;
       this.reconnect = configuration.getPlatformConfiguration().getServers().getClientReconnectWindow();
       this.relay = relay;
+      this.relayLocation = relayLocation;
     }
 
     @Override
@@ -424,8 +439,11 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     public boolean isRelayConfiguration() {
       return relay;
     }
-    
-    
+
+    @Override
+    public String getRelayLocation() {
+      return relayLocation;
+    } 
   }
   
   private static Server findServer(Servers servers, String serverName) throws ConfigurationException {
