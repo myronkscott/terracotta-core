@@ -19,13 +19,16 @@
 package com.tc.objectserver.handler;
 
 import com.tc.async.api.AbstractEventHandler;
+import com.tc.async.api.ConfigurationContext;
 import com.tc.async.api.EventHandler;
 import com.tc.async.api.EventHandlerException;
 import com.tc.async.api.Stage;
 import com.tc.exception.ServerException;
+import com.tc.exception.TCServerRestartException;
 import com.tc.l2.dup.RelayMessage;
 import com.tc.objectserver.entity.MessagePayload;
 import com.tc.l2.msg.ReplicationMessage;
+import com.tc.l2.state.ServerMode;
 import com.tc.l2.state.StateManager;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
@@ -33,6 +36,7 @@ import com.tc.net.groups.AbstractGroupMessage;
 import com.tc.net.groups.GroupEventsListener;
 import com.tc.net.groups.GroupException;
 import com.tc.net.groups.GroupManager;
+import com.tc.objectserver.core.api.ServerConfigurationContext;
 import com.tc.util.Assert;
 import java.util.function.Predicate;
 
@@ -44,19 +48,20 @@ public class DuplicationTransactionHandler {
   private static final Logger PLOGGER = LoggerFactory.getLogger(MessagePayload.class);
   private static final Logger LOGGER = LoggerFactory.getLogger(DuplicationTransactionHandler.class);
 
-  private StateManager stateMgr;
-  private final Stage<ReplicationMessage> sendToNext;
   private final GroupManager<AbstractGroupMessage> groupManager;
+  private final GroupEventsListener listener;
   
-  public DuplicationTransactionHandler(Predicate<NodeID> duplicator, Stage<ReplicationMessage> sendToNext, GroupManager<AbstractGroupMessage> groupManager) {
-    this.sendToNext = sendToNext;
+  public DuplicationTransactionHandler(StateManager stateMgr, Predicate<NodeID> duplicator, GroupManager<AbstractGroupMessage> groupManager) {
     this.groupManager = groupManager;
-    this.groupManager.registerForGroupEvents(new GroupEventsListener() {
+    this.listener = new GroupEventsListener() {
       @Override
       public void nodeJoined(NodeID nodeID) {
         try {
-          if (duplicator.test(nodeID)) {
+          if (duplicator.test(nodeID) && stateMgr.getCurrentMode() == ServerMode.RELAY) {
+            stateMgr.moveToPassiveSyncing(nodeID);
             groupManager.sendTo(nodeID, RelayMessage.createStartSync());
+          } else {
+            throw new TCServerRestartException("resyncing duplicate");
           }
         } catch (GroupException ge) {
 
@@ -65,30 +70,49 @@ public class DuplicationTransactionHandler {
 
       @Override
       public void nodeLeft(NodeID nodeID) {
-        
+
       }
-    });
+    };
   }
 
   private final EventHandler<RelayMessage> eventHandler = new AbstractEventHandler<RelayMessage>() {
-    @Override
+   private Stage<ReplicationMessage> sendToNext;
+   
+   @Override
     public void handleEvent(RelayMessage message) throws EventHandlerException {
       try {
-        processMessage(message);
+        processMessage(sendToNext, message);
       } catch (Throwable t) {
         // We don't expect to see an exception executing a replicated message.
         // TODO:  Find a better way to handle this error.
         throw Assert.failure("Unexpected exception executing replicated message", t);
       }
     }
+
+    @Override
+    protected void initialize(ConfigurationContext context) {
+      super.initialize(context);
+      sendToNext = context.getStage(ServerConfigurationContext.PASSIVE_REPLICATION_STAGE, ReplicationMessage.class);
+      groupManager.registerForGroupEvents(listener);
+    }
+
+    @Override
+    public void destroy() {
+      super.destroy();
+      groupManager.unregisterForGroupEvents(listener);
+    }
+    
+    
   };
 
   public EventHandler<RelayMessage> getEventHandler() {
     return eventHandler;
   }
   
-  private void processMessage(RelayMessage rep) throws ServerException {
+  private void processMessage(Stage<ReplicationMessage> sendToNext, RelayMessage rep) throws ServerException {
     ServerID activeSender = rep.messageFrom();
-    rep.unwindBatch(m->sendToNext.getSink().addToSink(m));
+    if (rep.getType() == RelayMessage.RELAY_BATCH) {
+      rep.unwindBatch(m->sendToNext.getSink().addToSink(m));
+    }
   }
 }

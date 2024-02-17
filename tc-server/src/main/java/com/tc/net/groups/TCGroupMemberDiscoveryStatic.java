@@ -321,7 +321,7 @@ public class TCGroupMemberDiscoveryStatic implements TCGroupMemberDiscovery {
 
     return dsm.isMemberInGroup();
   }
-
+  
   private static void debugInfo(String message) {
     L2DebugLogging.log(logger, LogLevel.INFO, message, null);
   }

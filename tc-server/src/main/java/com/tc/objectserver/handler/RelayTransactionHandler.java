@@ -24,6 +24,7 @@ import com.tc.async.api.EventHandler;
 import com.tc.async.api.EventHandlerException;
 import com.tc.async.api.Stage;
 import com.tc.exception.ServerException;
+import com.tc.l2.dup.RelayMessage;
 import com.tc.objectserver.entity.MessagePayload;
 import com.tc.l2.msg.ReplicationMessage;
 import com.tc.l2.msg.ReplicationResultCode;
@@ -32,9 +33,11 @@ import com.tc.l2.state.StateManager;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
+import com.tc.net.groups.GroupException;
 import com.tc.net.groups.GroupManager;
 import com.tc.objectserver.core.api.ServerConfigurationContext;
 import com.tc.util.Assert;
+import java.util.TreeMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,19 +47,30 @@ public class RelayTransactionHandler {
   private static final Logger PLOGGER = LoggerFactory.getLogger(MessagePayload.class);
   private static final Logger LOGGER = LoggerFactory.getLogger(RelayTransactionHandler.class);
 
+  private final GroupManager<AbstractGroupMessage> groupManager;
   private final PassiveAckSender ackSender;
+  private final Stage<Runnable> relaySender;
   private volatile long currentSequence = 0;
   private StateManager stateMgr;
-  private NodeID endTarget;
+  private ServerID endTarget = ServerID.NULL_ID;
+  private GroupMessageBatchContext<RelayMessage, ReplicationMessage> forward;
   
+  TreeMap<Long, ReplicationMessage> msgQueue = new TreeMap<>();
   
-
   public long getCurrentSequence() {
     return currentSequence;
   }
   
   public RelayTransactionHandler(Stage<Runnable> sendToActive, GroupManager<AbstractGroupMessage> groupManager) {
+    this.groupManager = groupManager;
     this.ackSender = new PassiveAckSender(groupManager, m->true, sendToActive.getSink());
+    this.relaySender = sendToActive;
+  }
+  
+  private static RelayMessage createRelayMessage(ReplicationMessage first) {
+    RelayMessage msg = new RelayMessage(RelayMessage.RELAY_BATCH);
+    msg.addToBatch(first);
+    return msg;
   }
 
   private final EventHandler<ReplicationMessage> eventHorizon = new AbstractEventHandler<ReplicationMessage>() {
@@ -79,12 +93,13 @@ public class RelayTransactionHandler {
     } 
   };
   
-  public boolean registerRelayConsumer(NodeID node) {
+  public boolean registerRelayConsumer(ServerID node) {
     NodeID active = stateMgr.getActiveNodeID();
     LOGGER.info("remote node connected for duplication {}", node);
-    if (!active.isNull()) {
+    if (!active.isNull() && endTarget.isNull()) {
       ackSender.requestPassiveSync(stateMgr.getActiveNodeID());
       endTarget = node;
+      this.forward = new GroupMessageBatchContext<>(RelayTransactionHandler::createRelayMessage, groupManager, node, Integer.MAX_VALUE, 1, n->sendToRelayTarget());
       return true;
     } else {
       return false;
@@ -107,5 +122,21 @@ public class RelayTransactionHandler {
       LOGGER.info(activity.toString());
       ackSender.acknowledge(activeSender, activity, ReplicationResultCode.NONE);
     }
+
+    if (forward.batchMessage(rep)) {
+      sendToRelayTarget();
+    }
+  }
+  
+  private void sendToRelayTarget() {
+    // If we created this message, enqueue the decision to flush it (the other case where we may flush is network
+    //  available).
+    this.relaySender.getSink().addToSink(() -> {
+      try {
+        this.forward.flushBatch();
+      } catch (GroupException group) {
+        //  ignore, active is gone
+      }
+    });
   }
 }

@@ -48,6 +48,7 @@ import com.tc.server.Directories;
 import org.terracotta.configuration.FailoverBehavior;
 import org.terracotta.configuration.ServerConfiguration;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.UnknownHostException;
@@ -57,15 +58,17 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import javax.management.NotCompliantMBeanException;
 import org.terracotta.config.Consistency;
 import org.terracotta.config.FailoverPriority;
 import org.terracotta.config.Property;
 import org.terracotta.config.Server;
 import org.terracotta.config.Servers;
+import org.terracotta.config.TcConfig;
 import org.terracotta.config.TcProperties;
-import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.DUPLICATE;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.HELP;
-import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY;
+import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY_DST;
+import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY_SRC;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.SERVER_NAME;
 import org.terracotta.config.service.ExtendedConfigParser;
 import org.terracotta.config.service.ServiceConfigParser;
@@ -84,8 +87,8 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     HELP("h", "help"),
     SERVER_NAME("n", "name"),
     CONFIG_PATH("f", "config"),
-    RELAY("r", "relay"),
-    DUPLICATE("d", "duplicate");
+    RELAY_SRC("s", "source"),
+    RELAY_DST("d", "destination");
 
     String shortName;
     String longName;
@@ -116,13 +119,20 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
 
   private volatile String serverName;
   private volatile TcConfiguration configuration;
-  private volatile boolean relay;
-  private volatile String relayLocation;
+  private volatile String relaySrc;
+  private volatile String relayDst;
+  private volatile TcConfigurationWrapper wrapped;
 
   @Override
   public void initialize(List<String> configurationParams) throws ConfigurationException {
     ClassLoader classLoader = this.getClass().getClassLoader();
     ClassLoader oldloader = Thread.currentThread().getContextClassLoader();
+    
+    try {
+      ServerEnv.getServer().getManagement().registerMBean("RelayManager", new RelayMBeanImpl(this));
+    } catch (NotCompliantMBeanException | NullPointerException not) {
+      
+    }
 
     try {
       Path configurationPath = getConfiguration(configurationParams.toArray(new String[0])).toAbsolutePath();
@@ -150,11 +160,12 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     } finally {
       Thread.currentThread().setContextClassLoader(oldloader);
     }
+    wrapped = new TcConfigurationWrapper(serverName, relaySrc, relayDst, configuration);
   }
 
   @Override
   public Configuration getConfiguration() {
-    return new TcConfigurationWrapper(serverName, relay, relayLocation, configuration);
+    return wrapped;
   }
 
   @Override
@@ -189,9 +200,11 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       throw new ConfigurationException("provided usage information");
     }
     
-    this.relay = commandLine.hasOption(RELAY.getShortName());
-    if (commandLine.hasOption(DUPLICATE.getShortName())) {
-      this.relayLocation = commandLine.getOptionValue(DUPLICATE.getShortName(), null);
+    if (commandLine.hasOption(RELAY_SRC.getShortName())) {
+      this.relaySrc = commandLine.getOptionValue(RELAY_SRC.getShortName(), null);
+    }
+    if (commandLine.hasOption(RELAY_DST.getShortName())) {
+      this.relayDst = commandLine.getOptionValue(RELAY_DST.getShortName(), null);
     }
 
     this.serverName = commandLine.getOptionValue(SERVER_NAME.getShortName());
@@ -264,17 +277,19 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
               .build()
     );
     options.addOption(
-        Option.builder(RELAY.getShortName())
-              .longOpt(RELAY.getLongName())
-              .desc("start in relay mode")
+        Option.builder(RELAY_SRC.getShortName())
+              .longOpt(RELAY_SRC.getLongName())
+              .hasArg()
+              .argName("relay-address")
+              .desc("start as a relay source")
               .build()
     );
     options.addOption(
-        Option.builder(DUPLICATE.getShortName())
-              .longOpt(DUPLICATE.getLongName())
+        Option.builder(RELAY_DST.getShortName())
+              .longOpt(RELAY_DST.getLongName())
               .hasArg()
               .argName("relay-address")
-              .desc("start in duplicate mode")
+              .desc("start as a relay destination")
               .build()
     );
     return options;
@@ -284,15 +299,31 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     private final String serverName;
     private final TcConfiguration  configuration;
     private final int reconnect;
-    private final boolean relay;
-    private final String relayLocation;
+    private InetSocketAddress relaySrc;
+    private InetSocketAddress relayDst;
 
-    public TcConfigurationWrapper(String serverName, boolean relay, String relayLocation, TcConfiguration configuration) {
+    public TcConfigurationWrapper(String serverName, String relaySrc, String relayDst, TcConfiguration configuration) {
       this.serverName = serverName;
       this.configuration = configuration;
-      this.reconnect = configuration.getPlatformConfiguration().getServers().getClientReconnectWindow();
-      this.relay = relay;
-      this.relayLocation = relayLocation;
+      TcConfig pc = configuration.getPlatformConfiguration();
+      Servers s = pc.getServers();
+      this.reconnect = s.getClientReconnectWindow();
+      this.relaySrc = parseRelay(relaySrc);
+      this.relayDst = parseRelay(relayDst);
+    }
+    
+    private InetSocketAddress parseRelay(String hostPort) {
+      if (hostPort != null) {
+        String[] sp = hostPort.split(":");
+        return InetSocketAddress.createUnresolved(sp[0], Integer.parseInt(sp[1]));
+      } else {
+        return null;
+      }
+    }
+    
+    private void clearRelays() {
+      this.relayDst = null;
+      this.relaySrc = null;
     }
 
     @Override
@@ -436,14 +467,29 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     }
 
     @Override
-    public boolean isRelayConfiguration() {
-      return relay;
+    public InetSocketAddress getRelayPeer() {
+      return relaySrc != null ? relaySrc : relayDst;
     }
 
     @Override
-    public String getRelayLocation() {
-      return relayLocation;
-    } 
+    public boolean isRelaySource() {
+      return relaySrc != null;
+    }
+
+    @Override
+    public boolean isRelayDestination() {
+      return relayDst != null;
+    }
+  }
+  
+  public boolean clearRelays() {
+    try {
+      return relaySrc != null | relayDst != null;
+    } finally {
+      relaySrc = null;
+      relayDst = null;
+      wrapped.clearRelays();
+    }
   }
   
   private static Server findServer(Servers servers, String serverName) throws ConfigurationException {

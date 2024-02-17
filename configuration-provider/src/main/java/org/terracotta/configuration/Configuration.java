@@ -18,6 +18,7 @@
  */
 package org.terracotta.configuration;
 
+import java.net.InetSocketAddress;
 import org.terracotta.entity.ServiceProviderConfiguration;
 
 import java.util.List;
@@ -46,11 +47,15 @@ public interface Configuration {
     return false;
   }
   
-  default boolean isRelayConfiguration() {
+  default boolean isRelaySource() {
+    return false;
+  }
+
+  default boolean isRelayDestination() {
     return false;
   }
   
-  default String getRelayLocation() {
+  default InetSocketAddress getRelayPeer() {
     return null;
   }
 }

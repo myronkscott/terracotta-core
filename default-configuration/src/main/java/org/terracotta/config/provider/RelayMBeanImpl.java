@@ -16,25 +16,25 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-package com.tc.net.groups;
+package org.terracotta.config.provider;
 
-import com.tc.net.NodeID;
+import javax.management.NotCompliantMBeanException;
+import javax.management.StandardMBean;
 
-import java.util.Set;
 
-public interface TCGroupMemberDiscovery extends GroupEventsListener {
+/**
+ *
+ */
+public class RelayMBeanImpl extends StandardMBean implements RelayMBean {
+  private final DefaultConfigurationProvider provider;
 
-  public void start() throws GroupException;
-  
-  public void stop(long timeout);
+  public RelayMBeanImpl(DefaultConfigurationProvider provider) throws NotCompliantMBeanException {
+    super(RelayMBean.class);
+    this.provider = provider;
+  }
 
-  public void setupNodes(Node local, Set<Node> nodes);
-  
-  public Node getLocalNode();
-  
-  public void discoveryHandler(DiscoveryStateMachine context);
-  
-  public boolean isValidClusterNode(NodeID nodeID);
-
-  public boolean isServerConnected(String nodeName);
-}  
+  @Override
+  public boolean clearRelay() {
+    return provider.clearRelays();
+  }
+}

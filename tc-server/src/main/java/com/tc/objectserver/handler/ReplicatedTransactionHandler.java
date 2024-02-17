@@ -103,7 +103,7 @@ public class ReplicatedTransactionHandler {
     this.stateManager = state;
     this.entityManager = manager;
     this.persistor = persistor;
-    this.ackMessenger = new PassiveAckSender(groupManager, m->stateManager.isActiveCoordinator(), sendToActive.getSink());
+    this.ackMessenger = new PassiveAckSender(groupManager, m->!stateManager.isActiveCoordinator(), sendToActive.getSink());
     try {
       platform = entityManager.getEntity(EntityDescriptor.createDescriptorForLifecycle(PlatformEntity.PLATFORM_ID, PlatformEntity.VERSION)).get();
     } catch (ServerException ee) {

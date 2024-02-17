@@ -441,6 +441,11 @@ public class TCServerImpl extends SEDA implements TCServer {
   {
     return dso.getConnectedClients();
   }
+  
+  @Override
+  public void disconnectPeer(String nodeName) {
+    dsoServer.getGroupManager().closeMember(nodeName);
+  }
 
   @Override
   public void pause(String path) {

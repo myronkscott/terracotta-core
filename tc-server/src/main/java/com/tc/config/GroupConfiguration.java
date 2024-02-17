@@ -22,6 +22,7 @@ import com.tc.net.TCSocketAddress;
 import com.tc.net.groups.Node;
 import static com.tc.properties.TCPropertiesConsts.L2_ELECTION_TIMEOUT;
 import com.tc.properties.TCPropertiesImpl;
+import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,9 +53,9 @@ public class GroupConfiguration {
     }
   }
   
-  GroupConfiguration(String target, GroupConfiguration parent) {
+  GroupConfiguration(InetSocketAddress target, GroupConfiguration parent) {
     Map<String, Node> base = new HashMap<>();
-    base.put(target, stringToNode(target));
+    base.put(target.getHostString() + ":" + target.getPort(), addressToNode(target));
     base.put(parent.serverName, parent.getCurrentNode());
     this.nodes = Collections.unmodifiableMap(base);
     this.serverName = parent.serverName;
@@ -68,7 +69,7 @@ public class GroupConfiguration {
     return nodes.get(serverName);
   }
   
-  public GroupConfiguration directConnect(String target) {
+  public GroupConfiguration directConnect(InetSocketAddress target) {
     return new GroupConfiguration(target, this);
   }
   
@@ -82,11 +83,8 @@ public class GroupConfiguration {
                            sc.getGroupPort().getPort());
   }
   
-  private static Node stringToNode(String var) {
-    String[] hostport = var.split("[:]");
-    String host = hostport[0];
-    int port = Integer.parseInt(hostport[1]);
-    return new Node(host, 0, port);
+  private static Node addressToNode(InetSocketAddress var) {
+    return new Node(var.getHostName(), 0, var.getPort());
   }
 
   public int getElectionTimeInSecs() {

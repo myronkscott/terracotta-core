@@ -78,6 +78,11 @@ public class TestActiveGroupManager implements GroupManager<GroupMessage> {
   }
 
   @Override
+  public void unregisterForGroupEvents(GroupEventsListener listener) {
+    groupListeners.remove(listener);
+  }
+
+  @Override
   public <M extends GroupMessage> void registerForMessages(Class<? extends M> msgClass, GroupMessageListener<M> listener) {
     messageListeners.put(msgClass.getName(), (GroupMessageListener<GroupMessage>)listener);
   }
@@ -202,6 +207,11 @@ public class TestActiveGroupManager implements GroupManager<GroupMessage> {
   public void closeMember(ServerID next) {
 
     //
+  }
+
+  @Override
+  public void closeMember(String name) {
+
   }
 
   @Override

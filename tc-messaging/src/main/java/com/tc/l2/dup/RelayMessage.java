@@ -18,19 +18,31 @@
  */
 package com.tc.l2.dup;
 
+import com.tc.bytes.TCByteBuffer;
+import com.tc.bytes.TCReference;
 import com.tc.io.TCByteBufferInput;
+import com.tc.io.TCByteBufferInputStream;
 import com.tc.io.TCByteBufferOutput;
+import com.tc.io.TCByteBufferOutputStream;
+import com.tc.l2.msg.IBatchableGroupMessage;
 import com.tc.l2.msg.ReplicationMessage;
+import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Collection;
+import java.util.ArrayList;
 import java.util.function.Consumer;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
-public class RelayMessage extends AbstractGroupMessage {
+public class RelayMessage extends AbstractGroupMessage implements IBatchableGroupMessage<ReplicationMessage> {
 
   public static final int        START_SYNC       = 0x01;
   public static final int        RELAY_BATCH       = 0x02;
 
-
+  private Collection<ReplicationMessage> payloadMessages;
 
   // To make serialization happy
   public RelayMessage() {
@@ -39,27 +51,120 @@ public class RelayMessage extends AbstractGroupMessage {
 
   public RelayMessage(int type) {
     super(type);
+    if (type == RELAY_BATCH) {
+      payloadMessages = new ArrayList<>();
+    }
   }
 
   @Override
   protected void basicDeserializeFrom(TCByteBufferInput in) throws IOException {
     switch (getType()) {
       case START_SYNC:
+        break;
       case RELAY_BATCH:
+        int len = in.readInt();
+        byte[] payload = new byte[len];
+        in.readFully(payload);
+        loadReplicationBatch(payload);
+        break;
     }
   }
 
   @Override
   protected void basicSerializeTo(TCByteBufferOutput out) {
-    
+    switch (getType()) {
+      case START_SYNC:
+        break;
+      case RELAY_BATCH:
+        byte[] payload = createReplicationBatch(payloadMessages);
+        out.writeInt(payload.length);
+        out.write(payload);
+        break;
+    }
   }
   
   public static AbstractGroupMessage createStartSync() {
     return new RelayMessage(START_SYNC);
   }
   
-  public void unwindBatch(Consumer<ReplicationMessage> next) {
-    
+  private static byte[] createReplicationBatch(Collection<ReplicationMessage> msgs) {
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    try (GZIPOutputStream compress = new GZIPOutputStream(bos);) {
+      for (ReplicationMessage added : msgs) {
+        TCByteBufferOutput out = new TCByteBufferOutputStream();
+        added.serializeTo(out);
+        out.close();
+        try (TCReference refs = out.accessBuffers()) {
+          for (TCByteBuffer bytes : refs) {
+            while (bytes.hasRemaining()) {
+              compress.write(bytes.get());
+            }
+          }
+        }
+      }
+    } catch (IOException io) {
+      
+    }
+    return bos.toByteArray();
   }
   
+  public void unwindBatch(Consumer<ReplicationMessage> next) {
+    payloadMessages.forEach(next);
+  }
+
+  private void loadReplicationBatch(byte[] payload) {
+    ByteArrayInputStream bis = new ByteArrayInputStream(payload);
+    TCByteBufferOutputStream output = new TCByteBufferOutputStream();
+    try (GZIPInputStream decompress = new GZIPInputStream(bis)) {
+      while (decompress.available() > 0) {
+        output.write(decompress.read());
+      }
+    } catch (IOException ioe) {
+      
+    }
+    output.close();
+    payloadMessages = new ArrayList<>();
+    try (TCReference refs = output.accessBuffers(); TCByteBufferInputStream input = new TCByteBufferInputStream(refs)) {
+      while (input.available() > 0) {
+        ReplicationMessage msg = new ReplicationMessage();
+        payloadMessages.add(msg);
+        try {
+          msg.deserializeFrom(input);
+          msg.setMessageOrginator(ServerID.NULL_ID);
+        } catch (IOException ioe) {
+
+        }
+      }
+    }
+  }
+
+  @Override
+  public void addToBatch(ReplicationMessage element) {
+    payloadMessages.add(element);
+  }
+
+  @Override
+  public int getBatchSize() {
+    return payloadMessages.size();
+  }
+
+  @Override
+  public long getPayloadSize() {
+    return payloadMessages.stream().map(ReplicationMessage::getPayloadSize).reduce(Long::sum).orElse(0L);
+  }
+
+  @Override
+  public void setSequenceID(long rid) {
+
+  }
+
+  @Override
+  public long getSequenceID() {
+    return payloadMessages.stream().findFirst().map(ReplicationMessage::getSequenceID).orElse(0L);
+  }
+
+  @Override
+  public AbstractGroupMessage asAbstractGroupMessage() {
+    return this;
+  }
 }

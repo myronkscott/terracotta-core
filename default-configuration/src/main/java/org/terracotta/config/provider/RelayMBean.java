@@ -16,25 +16,11 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-package com.tc.net.groups;
+package org.terracotta.config.provider;
 
-import com.tc.net.NodeID;
-
-import java.util.Set;
-
-public interface TCGroupMemberDiscovery extends GroupEventsListener {
-
-  public void start() throws GroupException;
-  
-  public void stop(long timeout);
-
-  public void setupNodes(Node local, Set<Node> nodes);
-  
-  public Node getLocalNode();
-  
-  public void discoveryHandler(DiscoveryStateMachine context);
-  
-  public boolean isValidClusterNode(NodeID nodeID);
-
-  public boolean isServerConnected(String nodeName);
-}  
+/**
+ *
+ */
+public interface RelayMBean {
+  boolean clearRelay();
+}

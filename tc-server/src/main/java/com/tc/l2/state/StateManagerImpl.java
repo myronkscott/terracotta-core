@@ -31,9 +31,6 @@ import com.tc.l2.ha.L2HAZapNodeRequestProcessor;
 import com.tc.l2.ha.WeightGeneratorFactory;
 import com.tc.l2.msg.L2StateMessage;
 import static com.tc.l2.state.ServerMode.ACTIVE;
-import static com.tc.l2.state.ServerMode.DIAGNOSTIC;
-import static com.tc.l2.state.ServerMode.RELAY;
-import static com.tc.l2.state.ServerMode.STOP;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
@@ -313,7 +310,7 @@ public class StateManagerImpl implements StateManager {
     NodeID active = src.messageFrom();
     
     electionMgr.reset(active, winningEnrollment);
-    
+        
     long[] weights = winningEnrollment.getWeights();
     //  term is always the last weight,  this value should
     //  not be used, it is currently only for informational
@@ -376,7 +373,10 @@ public class StateManagerImpl implements StateManager {
   
   @Override
   public void moveToPassiveSyncing(NodeID connectedTo) {
-    ServerMode old = switchToState(ServerMode.SYNCING, EnumSet.of(ServerMode.UNINITIALIZED));
+    ServerMode old = switchToState(ServerMode.SYNCING, EnumSet.of(ServerMode.UNINITIALIZED, ServerMode.RELAY));
+    if (old == ServerMode.RELAY) {
+      setActiveNodeID(connectedTo);    
+    }
     Assert.assertEquals(connectedTo, getActiveNodeID());
   }
 
@@ -549,6 +549,10 @@ public class StateManagerImpl implements StateManager {
     } catch (GroupException ge) {
       logger.error("Caught Exception while handling Message : " + clusterMsg, ge);
     }
+  }
+  
+  public void setActiveProxy(NodeID node) {
+    setActiveNodeID(node);
   }
   
   private void handleElectionWonMessage(L2StateMessage clusterMsg) {
