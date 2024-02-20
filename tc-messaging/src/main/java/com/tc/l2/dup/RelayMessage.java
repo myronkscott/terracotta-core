@@ -41,31 +41,48 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
 
   public static final int        START_SYNC       = 0x01;
   public static final int        RELAY_BATCH       = 0x02;
+  public static final int        RELAY_RESUME      = 0x04;
+  public static final int        RELAY_INVALID      = 0x08;
+  public static final int        RELAY_SUCCESS      = 0x10;
 
   private Collection<ReplicationMessage> payloadMessages;
+  private long          lastSeen;
 
   // To make serialization happy
   public RelayMessage() {
     super(-1);
   }
 
-  public RelayMessage(int type) {
+  RelayMessage(int type) {
     super(type);
     if (type == RELAY_BATCH) {
       payloadMessages = new ArrayList<>();
     }
+  }
+  
+  RelayMessage(long lastSeen) {
+    super(RELAY_RESUME);
+    this.lastSeen = lastSeen;
+  }
+  
+  public long getLastSeen() {
+    return lastSeen;
   }
 
   @Override
   protected void basicDeserializeFrom(TCByteBufferInput in) throws IOException {
     switch (getType()) {
       case START_SYNC:
+      case RELAY_INVALID:
         break;
       case RELAY_BATCH:
         int len = in.readInt();
         byte[] payload = new byte[len];
         in.readFully(payload);
         loadReplicationBatch(payload);
+        break;
+      case RELAY_RESUME:
+        lastSeen = in.readLong();
         break;
     }
   }
@@ -74,17 +91,37 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
   protected void basicSerializeTo(TCByteBufferOutput out) {
     switch (getType()) {
       case START_SYNC:
+      case RELAY_INVALID:
         break;
       case RELAY_BATCH:
         byte[] payload = createReplicationBatch(payloadMessages);
         out.writeInt(payload.length);
         out.write(payload);
         break;
+      case RELAY_RESUME:
+        out.writeLong(lastSeen);
+        break;
     }
   }
   
   public static AbstractGroupMessage createStartSync() {
     return new RelayMessage(START_SYNC);
+  }
+  
+  public static RelayMessage createRelayBatch() {
+    return new RelayMessage(RELAY_BATCH);
+  }
+  
+  public static RelayMessage createInvalid() {
+    return new RelayMessage(RELAY_INVALID);
+  }
+  
+  public static RelayMessage createSuccess() {
+    return new RelayMessage(RELAY_SUCCESS);
+  }
+  
+  public static AbstractGroupMessage createResumeMessage(long lastSeen) {
+    return new RelayMessage(lastSeen);
   }
   
   private static byte[] createReplicationBatch(Collection<ReplicationMessage> msgs) {
@@ -108,8 +145,8 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
     return bos.toByteArray();
   }
   
-  public void unwindBatch(Consumer<ReplicationMessage> next) {
-    payloadMessages.forEach(next);
+  public long unwindBatch(Consumer<ReplicationMessage> next) {
+    return payloadMessages.stream().peek(next).map(ReplicationMessage::getSequenceID).reduce(Long::max).orElse(Long.MIN_VALUE);
   }
 
   private void loadReplicationBatch(byte[] payload) {

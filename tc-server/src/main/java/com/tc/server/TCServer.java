@@ -90,4 +90,6 @@ public interface TCServer extends Pauseable {
   List<Client> getConnectedClients();
   
   void disconnectPeer(String nodeName);
+  
+  void leaveGroup();
 }

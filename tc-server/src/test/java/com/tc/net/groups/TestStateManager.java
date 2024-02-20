@@ -104,6 +104,11 @@ public class TestStateManager implements StateManager {
   }  
 
   @Override
+  public void moveToPassiveUnitialized() {
+
+  }
+
+  @Override
   public boolean moveToStopStateIf(Set<ServerMode> validStates) {
     isActive = false;
     return false;

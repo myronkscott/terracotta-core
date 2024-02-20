@@ -64,6 +64,8 @@ public interface StateManager extends PrettyPrintable {
   
   public void moveToRelayMode();
   
+  public void moveToPassiveUnitialized();
+  
   public boolean moveToStopStateIf(Set<ServerMode> validStates);
 
   public void publishActiveState(NodeID nodeID) throws GroupException;

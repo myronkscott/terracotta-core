@@ -30,6 +30,7 @@ import com.tc.l2.msg.ReplicationMessage;
 import com.tc.l2.msg.ReplicationResultCode;
 import com.tc.l2.msg.SyncReplicationActivity;
 import com.tc.l2.state.StateManager;
+import com.tc.logging.TCLogging;
 import com.tc.net.NodeID;
 import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
@@ -37,7 +38,7 @@ import com.tc.net.groups.GroupException;
 import com.tc.net.groups.GroupManager;
 import com.tc.objectserver.core.api.ServerConfigurationContext;
 import com.tc.util.Assert;
-import java.util.TreeMap;
+import com.tc.util.SimpleRingBuffer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,16 +51,11 @@ public class RelayTransactionHandler {
   private final GroupManager<AbstractGroupMessage> groupManager;
   private final PassiveAckSender ackSender;
   private final Stage<Runnable> relaySender;
-  private volatile long currentSequence = 0;
   private StateManager stateMgr;
   private ServerID endTarget = ServerID.NULL_ID;
-  private GroupMessageBatchContext<RelayMessage, ReplicationMessage> forward;
+  private volatile GroupMessageBatchContext<RelayMessage, ReplicationMessage> forward;
   
-  TreeMap<Long, ReplicationMessage> msgQueue = new TreeMap<>();
-  
-  public long getCurrentSequence() {
-    return currentSequence;
-  }
+  private final SimpleRingBuffer<ReplicationMessage> history = new SimpleRingBuffer<>(5000);
   
   public RelayTransactionHandler(Stage<Runnable> sendToActive, GroupManager<AbstractGroupMessage> groupManager) {
     this.groupManager = groupManager;
@@ -68,7 +64,7 @@ public class RelayTransactionHandler {
   }
   
   private static RelayMessage createRelayMessage(ReplicationMessage first) {
-    RelayMessage msg = new RelayMessage(RelayMessage.RELAY_BATCH);
+    RelayMessage msg = RelayMessage.createRelayBatch();
     msg.addToBatch(first);
     return msg;
   }
@@ -77,7 +73,6 @@ public class RelayTransactionHandler {
     @Override
     public void handleEvent(ReplicationMessage message) throws EventHandlerException {
       try {
-        currentSequence = message.getSequenceID();
         processMessage(message);
       } catch (Throwable t) {
         // We don't expect to see an exception executing a replicated message.
@@ -93,9 +88,19 @@ public class RelayTransactionHandler {
     } 
   };
   
+  public boolean resumeRelayConsumer(ServerID node, long lastSeen) {
+    NodeID active = stateMgr.getActiveNodeID();
+    TCLogging.getConsoleLogger().info("remote node connected for resumption of duplication {}", node);
+    if (!active.isNull() && endTarget.equals(node)) {
+      return replayHistory(new GroupMessageBatchContext<>(RelayTransactionHandler::createRelayMessage, groupManager, node, Integer.MAX_VALUE, 1, n->sendToRelayTarget()), lastSeen);
+    } else {
+      return false;
+    }
+  }
+  
   public boolean registerRelayConsumer(ServerID node) {
     NodeID active = stateMgr.getActiveNodeID();
-    LOGGER.info("remote node connected for duplication {}", node);
+    TCLogging.getConsoleLogger().info("remote node connected for duplication {}", node);
     if (!active.isNull() && endTarget.isNull()) {
       ackSender.requestPassiveSync(stateMgr.getActiveNodeID());
       endTarget = node;
@@ -105,7 +110,7 @@ public class RelayTransactionHandler {
       return false;
     }
   }
-
+  
   public EventHandler<ReplicationMessage> getEventHandler() {
     return eventHorizon;
   }
@@ -122,9 +127,26 @@ public class RelayTransactionHandler {
       LOGGER.info(activity.toString());
       ackSender.acknowledge(activeSender, activity, ReplicationResultCode.NONE);
     }
-
-    if (forward.batchMessage(rep)) {
+    addToHistory(rep);
+    
+    if (this.forward.batchMessage(rep)) {
       sendToRelayTarget();
+    }
+  }
+  
+  private synchronized void addToHistory(ReplicationMessage msg) {
+    history.put(msg);
+  }
+  
+  private synchronized boolean replayHistory(GroupMessageBatchContext<RelayMessage, ReplicationMessage> batcher, long lastSeen) {
+    boolean valid = history.stream().filter(m->m.getSequenceID() == lastSeen).findFirst().isPresent();
+    if (valid) {
+      history.stream().filter(m->m.getSequenceID() > lastSeen).forEach(batcher::batchMessage);
+      sendToRelayTarget();
+      this.forward = batcher;
+      return true;
+    } else {
+      return false;
     }
   }
   
@@ -135,7 +157,7 @@ public class RelayTransactionHandler {
       try {
         this.forward.flushBatch();
       } catch (GroupException group) {
-        //  ignore, active is gone
+       
       }
     });
   }

@@ -202,7 +202,7 @@ public class TCGroupManagerImplTest extends TCTestCase {
   //  groups[0].directedJoin(nodes[1].getHost() + ":" + nodes[1].getGroupPort(), groupConfiguration1);
     groups[1].join(groupConfiguration2);
     // open test
-    groups[0].directedJoin(LOCALHOST + ":" + groupPorts.get(1).port(), null);
+    groups[0].join(groupConfiguration1);
 
     Thread.sleep(2000);
 

@@ -187,7 +187,13 @@ public class TCServerInfo extends AbstractTerracottaMBean implements TCServerInf
   public void disconnectPeer(String nodeName) {
     server.disconnectPeer(nodeName);
   }
-
+  
+  
+  @Override
+  public void leaveGroup() {
+    server.leaveGroup();
+  }
+  
   @Override
   public MBeanNotificationInfo[] getNotificationInfo() {
     return Arrays.asList(NOTIFICATION_INFO).toArray(EMPTY_NOTIFICATION_INFO);

@@ -66,6 +66,7 @@ import org.terracotta.config.Server;
 import org.terracotta.config.Servers;
 import org.terracotta.config.TcConfig;
 import org.terracotta.config.TcProperties;
+import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.CONSOLE;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.HELP;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY_DST;
 import static org.terracotta.config.provider.DefaultConfigurationProvider.Opt.RELAY_SRC;
@@ -88,7 +89,8 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     SERVER_NAME("n", "name"),
     CONFIG_PATH("f", "config"),
     RELAY_SRC("s", "source"),
-    RELAY_DST("d", "destination");
+    RELAY_DST("d", "destination"),
+    CONSOLE("c", "console-logging");
 
     String shortName;
     String longName;
@@ -121,6 +123,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
   private volatile TcConfiguration configuration;
   private volatile String relaySrc;
   private volatile String relayDst;
+  private volatile boolean console;
   private volatile TcConfigurationWrapper wrapped;
 
   @Override
@@ -160,7 +163,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     } finally {
       Thread.currentThread().setContextClassLoader(oldloader);
     }
-    wrapped = new TcConfigurationWrapper(serverName, relaySrc, relayDst, configuration);
+    wrapped = new TcConfigurationWrapper(serverName, relaySrc, relayDst, console, configuration);
   }
 
   @Override
@@ -205,6 +208,10 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     }
     if (commandLine.hasOption(RELAY_DST.getShortName())) {
       this.relayDst = commandLine.getOptionValue(RELAY_DST.getShortName(), null);
+    }
+    
+    if (commandLine.hasOption(CONSOLE.getShortName())) {
+      this.console = true;
     }
 
     this.serverName = commandLine.getOptionValue(SERVER_NAME.getShortName());
@@ -292,6 +299,12 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
               .desc("start as a relay destination")
               .build()
     );
+    options.addOption(        
+        Option.builder(CONSOLE.getShortName())
+              .longOpt(CONSOLE.getLongName())
+              .desc("log only to the console")
+              .build()
+    );
     return options;
   }
   
@@ -301,8 +314,9 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     private final int reconnect;
     private InetSocketAddress relaySrc;
     private InetSocketAddress relayDst;
+    private boolean console;
 
-    public TcConfigurationWrapper(String serverName, String relaySrc, String relayDst, TcConfiguration configuration) {
+    public TcConfigurationWrapper(String serverName, String relaySrc, String relayDst, boolean console, TcConfiguration configuration) {
       this.serverName = serverName;
       this.configuration = configuration;
       TcConfig pc = configuration.getPlatformConfiguration();
@@ -310,6 +324,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       this.reconnect = s.getClientReconnectWindow();
       this.relaySrc = parseRelay(relaySrc);
       this.relayDst = parseRelay(relayDst);
+      this.console = console;
     }
     
     private InetSocketAddress parseRelay(String hostPort) {
@@ -335,7 +350,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       } else {
         defaultServer = getDefaultServer(servers);
       }
-      return new ServerConfigurationImpl(defaultServer, reconnect);
+      return new ServerConfigurationImpl(defaultServer, console, reconnect);
     }
 
     @Override
@@ -343,7 +358,7 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
       Servers servers = configuration.getPlatformConfiguration().getServers();
       List<Server> list = servers.getServer();
       List<ServerConfiguration> configs = new ArrayList<>(list.size());
-      list.forEach(s->configs.add(new ServerConfigurationImpl(s, reconnect)));
+      list.forEach(s->configs.add(new ServerConfigurationImpl(s, console, reconnect)));
       return configs;
     }
 

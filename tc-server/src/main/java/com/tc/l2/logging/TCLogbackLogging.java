@@ -67,7 +67,7 @@ public class TCLogbackLogging {
   public static void bootstrapLogging(OutputStream out) {
     LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
     ch.qos.logback.classic.Logger root = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME);
-
+    
     Iterator<Appender<ILoggingEvent>> appenders = root.iteratorForAppenders();
     boolean hasBuffer = false;
     boolean hasJfr = false;

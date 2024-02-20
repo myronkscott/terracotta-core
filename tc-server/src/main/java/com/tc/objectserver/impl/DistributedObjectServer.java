@@ -205,9 +205,6 @@ import com.tc.net.core.CachingClearTextBufferManagerFactory;
 import com.tc.net.core.DefaultBufferManagerFactory;
 import com.tc.net.core.TCConnectionManager;
 import com.tc.net.core.TCConnectionManagerImpl;
-import com.tc.net.protocol.tcm.ChannelEvent;
-import com.tc.net.protocol.tcm.ChannelEventListener;
-import static com.tc.net.protocol.tcm.ChannelEventType.CHANNEL_OPENED_EVENT;
 import com.tc.net.protocol.tcm.HydrateContext;
 import com.tc.net.protocol.tcm.HydrateHandler;
 import com.tc.net.protocol.tcm.MessageChannel;
@@ -719,7 +716,7 @@ public class DistributedObjectServer {
     HASettingsChecker haChecker = new HASettingsChecker(configSetupManager, tcProperties);
     haChecker.validateHealthCheckSettingsForHighAvailability();
 
-    StateManager state = new StateManagerImpl(consoleLogger, this.groupCommManager,
+    StateManager state = new StateManagerImpl(consoleLogger, (n)->!configuration.isRelayDestination(), this.groupCommManager, 
         createStageController(processTransactionHandler), eventCollector, stageManager,
         configSetupManager.getGroupConfiguration().getNodes().size(),
         configSetupManager.getGroupConfiguration().getElectionTimeInSecs(),
@@ -1178,6 +1175,7 @@ public class DistributedObjectServer {
       NodeID myNodeId;
       Configuration config = this.configSetupManager.getConfiguration();
       if (config.isRelayDestination()) {
+        consoleLogger.info("connectiong to {} for duplication", config.getRelayPeer());
         myNodeId = this.groupCommManager.join(this.configSetupManager.getGroupConfiguration().directConnect(config.getRelayPeer()));
       } else {
         myNodeId = this.groupCommManager.join(this.configSetupManager.getGroupConfiguration());
@@ -1395,6 +1393,20 @@ public class DistributedObjectServer {
         if (context.getType() == RelayMessage.START_SYNC) {
           if (!handler.registerRelayConsumer(context.messageFrom())) {
             throw new TCServerRestartException("restarting relay"); 
+          }
+        } else if (context.getType() == RelayMessage.RELAY_RESUME) {
+          if (!handler.resumeRelayConsumer(context.messageFrom(), context.getLastSeen())) {
+            try {
+              groupCommManager.sendTo(context.messageFrom(), RelayMessage.createInvalid());
+            } catch (GroupException e) {
+              throw new TCServerRestartException("restarting relay"); 
+            }
+          } else {
+            try {
+              groupCommManager.sendTo(context.messageFrom(), RelayMessage.createSuccess());
+            } catch (GroupException e) {
+              throw new TCServerRestartException("restarting relay"); 
+            }
           }
         }
       }

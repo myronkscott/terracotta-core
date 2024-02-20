@@ -28,10 +28,9 @@ import com.tc.exception.TCServerRestartException;
 import com.tc.l2.dup.RelayMessage;
 import com.tc.objectserver.entity.MessagePayload;
 import com.tc.l2.msg.ReplicationMessage;
-import com.tc.l2.state.ServerMode;
 import com.tc.l2.state.StateManager;
+import com.tc.logging.TCLogging;
 import com.tc.net.NodeID;
-import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
 import com.tc.net.groups.GroupEventsListener;
 import com.tc.net.groups.GroupException;
@@ -47,9 +46,11 @@ import org.slf4j.LoggerFactory;
 public class DuplicationTransactionHandler {
   private static final Logger PLOGGER = LoggerFactory.getLogger(MessagePayload.class);
   private static final Logger LOGGER = LoggerFactory.getLogger(DuplicationTransactionHandler.class);
+  
 
   private final GroupManager<AbstractGroupMessage> groupManager;
   private final GroupEventsListener listener;
+  private volatile long currentSequence = 0L;
   
   public DuplicationTransactionHandler(StateManager stateMgr, Predicate<NodeID> duplicator, GroupManager<AbstractGroupMessage> groupManager) {
     this.groupManager = groupManager;
@@ -57,9 +58,19 @@ public class DuplicationTransactionHandler {
       @Override
       public void nodeJoined(NodeID nodeID) {
         try {
-          if (duplicator.test(nodeID) && stateMgr.getCurrentMode() == ServerMode.RELAY) {
-            stateMgr.moveToPassiveSyncing(nodeID);
-            groupManager.sendTo(nodeID, RelayMessage.createStartSync());
+          if (duplicator.test(nodeID)) {
+            switch (stateMgr.getCurrentMode()) {
+              case RELAY:
+                TCLogging.getConsoleLogger().info("requesting duplication sync");
+                stateMgr.moveToPassiveSyncing(nodeID);
+                groupManager.sendTo(nodeID, RelayMessage.createStartSync());
+                break;
+              case PASSIVE:
+                groupManager.sendTo(nodeID, RelayMessage.createResumeMessage(currentSequence));
+                break;
+              default:
+                throw new TCServerRestartException("invalid state for duplication");
+            }
           } else {
             throw new TCServerRestartException("resyncing duplicate");
           }
@@ -80,13 +91,21 @@ public class DuplicationTransactionHandler {
    
    @Override
     public void handleEvent(RelayMessage message) throws EventHandlerException {
-      try {
-        processMessage(sendToNext, message);
-      } catch (Throwable t) {
-        // We don't expect to see an exception executing a replicated message.
-        // TODO:  Find a better way to handle this error.
-        throw Assert.failure("Unexpected exception executing replicated message", t);
-      }
+     switch (message.getType()) {
+       case RelayMessage.RELAY_INVALID:
+         throw new TCServerRestartException("duplicate server is no longer in sync with relay");
+       case RelayMessage.RELAY_SUCCESS:
+         TCLogging.getConsoleLogger().info("relay resume is successful");
+         break;
+       default:
+         try {
+           processMessage(sendToNext, message);
+         } catch (Throwable t) {
+           // We don't expect to see an exception executing a replicated message.
+           // TODO:  Find a better way to handle this error.
+           throw Assert.failure("Unexpected exception executing replicated message", t);
+         }break;
+     }
     }
 
     @Override
@@ -110,9 +129,11 @@ public class DuplicationTransactionHandler {
   }
   
   private void processMessage(Stage<ReplicationMessage> sendToNext, RelayMessage rep) throws ServerException {
-    ServerID activeSender = rep.messageFrom();
     if (rep.getType() == RelayMessage.RELAY_BATCH) {
-      rep.unwindBatch(m->sendToNext.getSink().addToSink(m));
+      long last = rep.unwindBatch(m->sendToNext.getSink().addToSink(m));
+      currentSequence = Long.max(currentSequence, last);
+    } else {
+      throw new UnsupportedOperationException("relay message:" + rep);
     }
   }
 }

@@ -53,6 +53,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.terracotta.server.ServerEnv;
 import org.terracotta.tripwire.TripwireFactory;
 import com.tc.objectserver.persistence.ServerPersistentState;
+import java.util.function.Predicate;
 
 
 public class StateManagerImpl implements StateManager {
@@ -60,6 +61,7 @@ public class StateManagerImpl implements StateManager {
 
   private final Logger consoleLogger;
   private final GroupManager<AbstractGroupMessage> groupManager;
+  private final Predicate<NodeID>       startElection;
   private final ElectionManagerImpl        electionMgr;
   private final ConsistencyManager     availabilityMgr;
   private final TopologyManager topologyManager;
@@ -83,13 +85,14 @@ public class StateManagerImpl implements StateManager {
 
   private Enrollment verification = null;
 
-  public StateManagerImpl(Logger consoleLogger, GroupManager<AbstractGroupMessage> groupManager,
+  public StateManagerImpl(Logger consoleLogger, Predicate<NodeID> canStartElection, GroupManager<AbstractGroupMessage> groupManager,
                           StageController controller, ManagementTopologyEventCollector eventCollector, StageManager mgr,
                           int expectedServers, int electionTimeInSec, WeightGeneratorFactory weightFactory,
                           ConsistencyManager availabilityMgr,
                           ServerPersistentState serverPersitenceState, TopologyManager topologyManager) {
     this.consoleLogger = consoleLogger;
     this.groupManager = groupManager;
+    this.startElection = canStartElection;
     this.stateChangeSink = controller;
     this.eventCollector = eventCollector;
     this.weightsFactory = weightFactory;
@@ -405,6 +408,11 @@ public class StateManagerImpl implements StateManager {
       switchToState(ServerMode.RELAY, EnumSet.of(ServerMode.INITIAL, ServerMode.RELAY));
   }
   
+  @Override
+  public void moveToPassiveUnitialized() {
+      switchToState(ServerMode.UNINITIALIZED, EnumSet.of(ServerMode.INITIAL));
+  }
+  
   private void moveToStartStateIfBootstrapping() {
     try {
       if (getCurrentMode() == ServerMode.INITIAL) {
@@ -549,10 +557,6 @@ public class StateManagerImpl implements StateManager {
     } catch (GroupException ge) {
       logger.error("Caught Exception while handling Message : " + clusterMsg, ge);
     }
-  }
-  
-  public void setActiveProxy(NodeID node) {
-    setActiveNodeID(node);
   }
   
   private void handleElectionWonMessage(L2StateMessage clusterMsg) {
@@ -737,7 +741,7 @@ public class StateManagerImpl implements StateManager {
         elect = true;
       }
     }
-    if (elect) {
+    if (elect && startElection.test(disconnectedNode)) {
       info("Starting Election to determine cluster wide ACTIVE L2");
       runElection();
     } else {

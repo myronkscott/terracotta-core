@@ -430,8 +430,7 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
       return false;
     }
   }
-  
-  @Override
+
   public NodeID directedJoin(String target, ChannelEventListener listener) throws GroupException {
     String[] hostPort = target.split("[:]");
     
@@ -460,6 +459,12 @@ public class TCGroupManagerImpl implements GroupManager<AbstractGroupMessage>, C
       throw new GroupException(e);
     }
     return (getNodeID());
+  }
+  
+  @Override
+  public void disconnect() {
+    Collection<ServerID> check = new ArrayList<>(members.keySet());
+    check.stream().filter(n->!n.equals(thisNodeID)).forEach(this::closeMember);
   }
 
   /**
