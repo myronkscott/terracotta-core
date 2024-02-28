@@ -28,11 +28,11 @@ import java.util.Queue;
  * @author teck
  */
 public interface TCProtocolAdaptor {
-  default void addReadData(TCConnection source, TCByteBuffer data[], int length) throws TCProtocolException {
-    addReadData(source, data, length, null);
+  default void addReadData(TCConnection source, TCByteBuffer data[]) throws TCProtocolException {
+    addReadData(source, data, null);
   }
 
-  public void addReadData(TCConnection source, TCByteBuffer data[], int length, Queue<TCByteBuffer> recycle) throws TCProtocolException;
+  public void addReadData(TCConnection source, TCByteBuffer data[], Queue<TCByteBuffer> recycle) throws TCProtocolException;
 
   public TCByteBuffer[] getReadBuffers();
 }

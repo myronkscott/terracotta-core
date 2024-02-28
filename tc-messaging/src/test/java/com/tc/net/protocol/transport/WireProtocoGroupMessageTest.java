@@ -58,12 +58,12 @@ public class WireProtocoGroupMessageTest {
       System.out.println(message);
     });
     adaptor.getReadBuffers()[0].put(grp.getHeader().getDataBuffer());
-    adaptor.addReadData(src, new TCByteBuffer[] {adaptor.getReadBuffers()[0]}, grp.getHeaderLength());
+    adaptor.addReadData(src, new TCByteBuffer[] {adaptor.getReadBuffers()[0]});
     TCByteBuffer m = adaptor.getReadBuffers()[0];
     for (TCByteBuffer buffer : grp.getPayload()) {
       m.put(buffer);
     }
-    adaptor.addReadData(src, new TCByteBuffer[] {m}, grp.getDataLength());    
+    adaptor.addReadData(src, new TCByteBuffer[] {m});    
   }
   
   @Test

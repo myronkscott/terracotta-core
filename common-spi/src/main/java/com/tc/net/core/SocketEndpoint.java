@@ -19,17 +19,29 @@
 package com.tc.net.core;
 
 import java.io.IOException;
-import java.nio.channels.SocketChannel;
+import java.nio.ByteBuffer;
 
 /**
- * @author Ludovic Orban
+ *
  */
-public interface BufferManagerFactory {
-
-  BufferManager createBufferManager(SocketChannel socketChannel, boolean client) throws IOException;
+public interface SocketEndpoint extends AutoCloseable {
+    
+  ResultType writeFrom(ByteBuffer[] ref) throws IOException;
   
-  default SocketEndpoint createSocketChannelEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
-    return new BufferManagerWrapper(createBufferManager(socketChannel, client));
+  ResultType readTo(ByteBuffer[] ref) throws IOException;
+
+  @Override
+  void close() throws IOException;
+
+  default void dispose() {
+    
   }
 
+  enum ResultType {
+    EOF,
+    ZERO,
+    SUCCESS,
+    UNDERFLOW,
+    OVERFLOW,
+  }
 }

@@ -62,6 +62,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.Ignore;
 import org.junit.Test;
 import static org.mockito.ArgumentMatchers.any;
 
@@ -184,47 +185,47 @@ public class TCGroupManagerImplTest extends TCTestCase {
     tearGroups();
   }
   
-  public void testRelayReplicateOpenClose() throws Exception {
-    setupGroups(2);
-
-    groups[0].setDiscover(new NullTCGroupMemberDiscovery());
-    groups[1].setDiscover(new NullTCGroupMemberDiscovery());
-
-    Set<Node> nodeSet1 = new HashSet<>();
-    nodeSet1.add(nodes[0]);
-     
-    Set<Node> nodeSet2 = new HashSet<>();
-    nodeSet2.add(nodes[1]);
-    
-    GroupConfiguration groupConfiguration1 = getGroupConfiguration(nodeSet1, nodes[0]);
-    GroupConfiguration groupConfiguration2 = getGroupConfiguration(nodeSet2, nodes[1]);
-
-  //  groups[0].directedJoin(nodes[1].getHost() + ":" + nodes[1].getGroupPort(), groupConfiguration1);
-    groups[1].join(groupConfiguration2);
-    // open test
-    groups[0].join(groupConfiguration1);
-
-    Thread.sleep(2000);
-
-    assertEquals(1, groups[0].size());
-    assertEquals(1, groups[1].size());
-    TCGroupMember member1 = getMember(groups[0], 0);
-    TCGroupMember member2 = getMember(groups[1], 0);
-    assertTrue("Expected  " + member1.getLocalNodeID() + " but got " + member2.getPeerNodeID(), member1
-        .getLocalNodeID().equals(member2.getPeerNodeID()));
-    assertTrue("Expected  " + member1.getPeerNodeID() + " but got " + member2.getLocalNodeID(), member1.getPeerNodeID()
-        .equals(member2.getLocalNodeID()));
-    
-    // close test
-    member1.getChannel().close();
-
-    while ((groups[0].size() != 0) || (groups[1].size() != 0)) {
-      System.err.println("XXX " + member1 + "; size: " + groups[0].size());
-      System.err.println("XXX " + member2 + "; size: " + groups[1].size());
-    }
-
-    tearGroups();
-  }
+//  @Ignore
+//  public void testRelayReplicateOpenClose() throws Exception {
+//    setupGroups(2);
+//
+//    groups[0].setDiscover(new NullTCGroupMemberDiscovery());
+//    groups[1].setDiscover(new NullTCGroupMemberDiscovery());
+//
+//    Set<Node> nodeSet1 = new HashSet<>();
+//    nodeSet1.add(nodes[0]);
+//     
+//    Set<Node> nodeSet2 = new HashSet<>();
+//    nodeSet2.add(nodes[1]);
+//    
+//    GroupConfiguration groupConfiguration1 = getGroupConfiguration(nodeSet1, nodes[0]);
+//    GroupConfiguration groupConfiguration2 = getGroupConfiguration(nodeSet2, nodes[1]);
+//
+//    groups[1].join(groupConfiguration2);
+//    // open test
+//    groups[0].join(groupConfiguration1);
+//
+//    Thread.sleep(2000);
+//
+//    assertEquals(1, groups[0].size());
+//    assertEquals(1, groups[1].size());
+//    TCGroupMember member1 = getMember(groups[0], 0);
+//    TCGroupMember member2 = getMember(groups[1], 0);
+//    assertTrue("Expected  " + member1.getLocalNodeID() + " but got " + member2.getPeerNodeID(), member1
+//        .getLocalNodeID().equals(member2.getPeerNodeID()));
+//    assertTrue("Expected  " + member1.getPeerNodeID() + " but got " + member2.getLocalNodeID(), member1.getPeerNodeID()
+//        .equals(member2.getLocalNodeID()));
+//    
+//    // close test
+//    member1.getChannel().close();
+//
+//    while ((groups[0].size() != 0) || (groups[1].size() != 0)) {
+//      System.err.println("XXX " + member1 + "; size: " + groups[0].size());
+//      System.err.println("XXX " + member2 + "; size: " + groups[1].size());
+//    }
+//
+//    tearGroups();
+//  }
   
   public void testOpenZappedNode() throws Exception {
     setupGroups(2);

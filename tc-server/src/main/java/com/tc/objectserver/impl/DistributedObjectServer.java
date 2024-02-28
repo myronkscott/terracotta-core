@@ -569,7 +569,7 @@ public class DistributedObjectServer {
 
     BufferManagerFactory bufferManagerFactory = getBufferManagerFactory(platformServiceRegistry);
 
-    TCConnectionManager connectionManager = new TCConnectionManagerImpl(configSetupManager.getServerConfiguration().getName() + " - " + CommunicationsManager.COMMSMGR_SERVER, commWorkerThreadCount, bufferManagerFactory);
+    TCConnectionManager connectionManager = new TCConnectionManagerImpl(configSetupManager.getServerConfiguration().getName(), commWorkerThreadCount, bufferManagerFactory);
 
     final MessageMonitor mm = MessageMonitorImpl.createMonitor(tcProperties, logger, threadGroup, connectionManager);
 
@@ -694,7 +694,7 @@ public class DistributedObjectServer {
     messengerProvider.setMessageSink(fast.getSink());
     entityManager.setMessageSink(fast.getSink());
 
-    this.groupCommManager = this.serverBuilder.createGroupCommManager(this.configSetupManager, stageManager,
+    this.groupCommManager = this.serverBuilder.createGroupCommManager(this.configSetupManager, stageManager, connectionManager,
                                                                       this.thisServerNodeID,
                                                                       this.stripeIDStateManager, this.globalWeightGeneratorFactory,
                                                                       bufferManagerFactory);

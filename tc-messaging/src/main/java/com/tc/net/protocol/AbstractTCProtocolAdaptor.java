@@ -94,13 +94,12 @@ public abstract class AbstractTCProtocolAdaptor implements TCProtocolAdaptor {
     header = getNewProtocolHeader();
   }
 
-  protected final TCNetworkMessage processIncomingData(TCConnection source, TCByteBuffer[] data, int length, Queue<TCByteBuffer> recycle)
+  protected final TCNetworkMessage processIncomingData(TCConnection source, TCByteBuffer[] data, Queue<TCByteBuffer> recycle)
       throws TCProtocolException {
     if (mode == MODE_HEADER) { return processHeaderData(source, data, recycle); }
 
     Assert.eval(mode == MODE_DATA);
-    if (length > dataBytesNeeded) { throw new TCProtocolException("More data read then expected: (" + length + " > "
-                                                                  + dataBytesNeeded + ")"); }
+
     return processPayloadData(source, data, recycle);
   }
 

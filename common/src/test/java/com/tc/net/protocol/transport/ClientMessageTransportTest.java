@@ -51,7 +51,7 @@ public class ClientMessageTransportTest {
       public TCProtocolAdaptor newWireProtocolAdaptor(WireProtocolMessageSink sink) {
         adapt = new WireProtocolAdaptorImpl(sink) {
           @Override
-          public void addReadData(TCConnection source, TCByteBuffer[] data, int length, Queue<TCByteBuffer> recycle) throws TCProtocolException {
+          public void addReadData(TCConnection source, TCByteBuffer[] data, Queue<TCByteBuffer> recycle) throws TCProtocolException {
             sink.putMessage(seed);
             seed.complete();
           }
@@ -71,7 +71,7 @@ public class ClientMessageTransportTest {
     TCProtocolAdaptor proto = client.getProtocolAdapter();
 
     seed = spy(factory.createAck(ConnectionID.NULL_ID, connection));
-    proto.addReadData(connection, new TCByteBuffer[]{}, 0);
+    proto.addReadData(connection, new TCByteBuffer[]{});
     verify(seed).complete();
     
   }

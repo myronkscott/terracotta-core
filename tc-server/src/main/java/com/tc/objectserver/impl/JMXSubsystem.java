@@ -165,7 +165,7 @@ public class JMXSubsystem {
     } else if (cmd.startsWith("is")) {
       result = server.getAttribute(name, cmd.substring(2));
     } else {
-      if (args == null || args.length == 0) {
+      if (args == null || args.length == 0 || args[0] == null) {
         result = server.invoke(name, cmd, new Object[0], new String[0]);
       } else {
         String[] sig = new String[args.length];

@@ -124,7 +124,6 @@ public class RelayTransactionHandler {
     }
     ServerID activeSender = rep.messageFrom();
     for (SyncReplicationActivity activity : rep.getActivities()) {
-      LOGGER.info(activity.toString());
       ackSender.acknowledge(activeSender, activity, ReplicationResultCode.NONE);
     }
     addToHistory(rep);
@@ -141,7 +140,7 @@ public class RelayTransactionHandler {
   private synchronized boolean replayHistory(GroupMessageBatchContext<RelayMessage, ReplicationMessage> batcher, long lastSeen) {
     boolean valid = history.stream().filter(m->m.getSequenceID() == lastSeen).findFirst().isPresent();
     if (valid) {
-      history.stream().filter(m->m.getSequenceID() > lastSeen).forEach(batcher::batchMessage);
+      history.stream().filter(m->m.getSequenceID() > lastSeen).peek(m->System.out.println("replaying:" + m)).forEach(batcher::batchMessage);
       sendToRelayTarget();
       this.forward = batcher;
       return true;

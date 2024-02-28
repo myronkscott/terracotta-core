@@ -18,8 +18,8 @@
  */
 package com.tc.net.basic;
 
-import com.tc.bytes.TCByteBuffer;
 import com.tc.bytes.TCReference;
+import com.tc.bytes.TCReferenceSupport;
 import com.tc.net.core.BufferManager;
 import com.tc.net.core.BufferManagerFactory;
 import com.tc.net.core.TCConnection;
@@ -60,6 +60,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.tc.net.core.SocketEndpoint;
 
 /**
  *
@@ -74,7 +75,7 @@ public class BasicConnection implements TCConnection {
   private final Consumer<TCConnection> closeRunnable;
   private final Consumer<WireProtocolMessage> write;
   private final TCProtocolAdaptor adaptor;
-  private volatile BufferManager buffer;
+  private volatile SocketEndpoint socket;
   private final BufferManagerFactory bufferManagerFactory;
   private Socket src;
   private boolean established = false;
@@ -97,33 +98,26 @@ public class BasicConnection implements TCConnection {
         try {
           if (this.src != null) {
             boolean interrupted = Thread.interrupted();
-            int totalLen = message.getTotalLength();
-            int moved = 0;
-            int sent = 0;
             try (TCReference data = message.getEntireMessageData().duplicate()) {
-              while (moved < totalLen) {
-                for (TCByteBuffer b : data) {
-                  if (!b.hasRemaining()) {
-                    // if there is no data here to write move to next
-                    continue;
-                  }
-                  ByteBuffer bb = b.getNioBuffer();
-                  moved += buffer.forwardToWriteBuffer(bb);
-                  b.returnNioBuffer(bb);
-                  if (b.hasRemaining()) {
-                    // if there is still data here, flush the buffer and try again to complete
-                    break;
+              ByteBuffer[] target = data.toByteBufferArray();
+              try {
+                while (data.hasRemaining()) {
+                  switch(this.socket.writeFrom(target)) {
+                    case EOF:
+                    case OVERFLOW:
+                    case UNDERFLOW:
+                      throw new IOException();
+                    case SUCCESS:
+                    case ZERO:
+                      break;
                   }
                 }
-                sent += buffer.sendFromBuffer();
+              } finally {
+                data.returnByteBufferArray(target);
               }
-              while (sent < totalLen) {
-                // flush everything out of the buffer
-                sent += buffer.sendFromBuffer();
-              }
-              if (interrupted) {
-                Thread.currentThread().interrupt();
-              }
+            }
+            if (interrupted) {
+              Thread.currentThread().interrupt();
             }
           }
         } catch (IOException ioe) {
@@ -224,7 +218,7 @@ public class BasicConnection implements TCConnection {
   }  
   
   private boolean shutdownBuffer() {
-    BufferManager buff = this.buffer;
+    SocketEndpoint buff = this.socket;
     if (buff != null) {
       try {
         buff.close();
@@ -307,8 +301,8 @@ public class BasicConnection implements TCConnection {
     // always rebuild the socket address with exerything that comes with it UnkownHostException etc
     SocketChannel channel = SocketChannel.open(new InetSocketAddress(InetAddress.getByName(addr.getHostString()), addr.getPort()));
     src = channel.socket();
-    this.buffer = bufferManagerFactory.createBufferManager(channel, true);
-    if (this.buffer == null) {
+    this.socket = bufferManagerFactory.createSocketChannelEndpoint(channel, true);
+    if (this.socket == null) {
       throw new IOException("buffer manager not provided");
     }
     this.connected = src.isConnected();
@@ -392,34 +386,23 @@ public class BasicConnection implements TCConnection {
         if (exiting) {
           return;
         }
-        try {
-          long amount = buffer.recvToBuffer();
-          if (amount > 0) {
-            if (amount > Integer.MAX_VALUE) {
-              throw new AssertionError("overflow long");
+        try (TCReference ref = TCReferenceSupport.createDirectReference(adaptor.getReadBuffers())) {
+          ByteBuffer[] target = ref.toByteBufferArray();
+          try {
+            switch(socket.readTo(target)) {
+              case EOF:
+                throw new EOFException();
+              case OVERFLOW:
+                throw new IOException("IO overflow");
+              case SUCCESS:
+              case ZERO:
+                adaptor.addReadData(this, ref.toArray());
+                break;
             }
-            int transfer = 0;
-            while (transfer < amount) {
-              int i = 0;
-              int read = 0;
-              TCByteBuffer[] buffers = adaptor.getReadBuffers();
-              while (i < buffers.length) {
-                read += buffer.forwardFromReadBuffer(buffers[i].getNioBuffer());
-                if (!buffers[i].hasRemaining()) {
-                  i += 1;
-                } else {
-                  break;
-                }
-              }
-              adaptor.addReadData(this, buffers, read);
-              transfer += read;
-            }
-            markReceived();
-          } else {
-            if (amount < 0) {
-              throw new EOFException();
-            }
+          } finally {
+            ref.returnByteBufferArray(target);
           }
+          markReceived();
         } catch (EOFException eof) {
           if (!isClosed()) {
             fireEOF();
@@ -479,10 +462,10 @@ public class BasicConnection implements TCConnection {
     state.put("closed", isClosed());
     state.put("connected", isConnected());
     state.put("transportConnected", isTransportEstablished());
-    if (buffer instanceof PrettyPrintable) {
-      state.put("buffer", ((PrettyPrintable)this.buffer).getStateMap());
+    if (socket instanceof PrettyPrintable) {
+      state.put("buffer", ((PrettyPrintable)this.socket).getStateMap());
     } else {
-      state.put("buffer", this.buffer.toString());
+      state.put("buffer", this.socket.toString());
     }
     return state;
   }  

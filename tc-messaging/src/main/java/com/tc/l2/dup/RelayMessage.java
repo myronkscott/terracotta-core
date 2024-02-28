@@ -18,8 +18,8 @@
  */
 package com.tc.l2.dup;
 
-import com.tc.bytes.TCByteBuffer;
-import com.tc.bytes.TCReference;
+import com.tc.io.InputWrapper;
+import com.tc.io.OutputWrapper;
 import com.tc.io.TCByteBufferInput;
 import com.tc.io.TCByteBufferInputStream;
 import com.tc.io.TCByteBufferOutput;
@@ -28,9 +28,9 @@ import com.tc.l2.msg.IBatchableGroupMessage;
 import com.tc.l2.msg.ReplicationMessage;
 import com.tc.net.ServerID;
 import com.tc.net.groups.AbstractGroupMessage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Collection;
 import java.util.ArrayList;
 import java.util.function.Consumer;
@@ -76,10 +76,7 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
       case RELAY_INVALID:
         break;
       case RELAY_BATCH:
-        int len = in.readInt();
-        byte[] payload = new byte[len];
-        in.readFully(payload);
-        loadReplicationBatch(payload);
+        loadReplicationBatch(in);
         break;
       case RELAY_RESUME:
         lastSeen = in.readLong();
@@ -94,9 +91,7 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
       case RELAY_INVALID:
         break;
       case RELAY_BATCH:
-        byte[] payload = createReplicationBatch(payloadMessages);
-        out.writeInt(payload.length);
-        out.write(payload);
+        createReplicationBatch(out);
         break;
       case RELAY_RESUME:
         out.writeLong(lastSeen);
@@ -124,44 +119,35 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
     return new RelayMessage(lastSeen);
   }
   
-  private static byte[] createReplicationBatch(Collection<ReplicationMessage> msgs) {
-    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-    try (GZIPOutputStream compress = new GZIPOutputStream(bos);) {
-      for (ReplicationMessage added : msgs) {
-        TCByteBufferOutput out = new TCByteBufferOutputStream();
-        added.serializeTo(out);
-        out.close();
-        try (TCReference refs = out.accessBuffers()) {
-          for (TCByteBuffer bytes : refs) {
-            while (bytes.hasRemaining()) {
-              compress.write(bytes.get());
-            }
-          }
+  private void createReplicationBatch(TCByteBufferOutput output) {
+    try (GZIPOutputStream compress = new GZIPOutputStream(new OutputWrapper(output));) {
+      try (TCByteBufferOutputStream out = new TCByteBufferOutputStream()) {
+        for (ReplicationMessage added : payloadMessages) {
+          added.serializeTo(out);
+        }
+        try (TCByteBufferInputStream in = new TCByteBufferInputStream(out.accessBuffers())) {
+          transfer(in, compress);
         }
       }
     } catch (IOException io) {
-      
+      throw new RuntimeException(io);
     }
-    return bos.toByteArray();
   }
   
   public long unwindBatch(Consumer<ReplicationMessage> next) {
     return payloadMessages.stream().peek(next).map(ReplicationMessage::getSequenceID).reduce(Long::max).orElse(Long.MIN_VALUE);
   }
-
-  private void loadReplicationBatch(byte[] payload) {
-    ByteArrayInputStream bis = new ByteArrayInputStream(payload);
+  
+  private void loadReplicationBatch(TCByteBufferInput source) {
     TCByteBufferOutputStream output = new TCByteBufferOutputStream();
-    try (GZIPInputStream decompress = new GZIPInputStream(bis)) {
-      while (decompress.available() > 0) {
-        output.write(decompress.read());
-      }
+    try (GZIPInputStream decompress = new GZIPInputStream(new InputWrapper(source))) {
+      transfer(decompress, output);
     } catch (IOException ioe) {
-      
+      throw new RuntimeException(ioe);
     }
     output.close();
     payloadMessages = new ArrayList<>();
-    try (TCReference refs = output.accessBuffers(); TCByteBufferInputStream input = new TCByteBufferInputStream(refs)) {
+    try (TCByteBufferInputStream input = new TCByteBufferInputStream(output.accessBuffers())) {
       while (input.available() > 0) {
         ReplicationMessage msg = new ReplicationMessage();
         payloadMessages.add(msg);
@@ -169,12 +155,23 @@ public class RelayMessage extends AbstractGroupMessage implements IBatchableGrou
           msg.deserializeFrom(input);
           msg.setMessageOrginator(ServerID.NULL_ID);
         } catch (IOException ioe) {
-
+          throw new RuntimeException(ioe);
         }
       }
     }
   }
-
+  
+  private static long transfer(InputStream in, OutputStream out) throws IOException {
+    long transferred = 0;
+    byte[] buffer = new byte[1024];
+    int read;
+    while ((read = in.read(buffer, 0, buffer.length)) >= 0) {
+        out.write(buffer, 0, read);
+        transferred += read;
+    }
+    return transferred;
+  }
+  
   @Override
   public void addToBatch(ReplicationMessage element) {
     payloadMessages.add(element);

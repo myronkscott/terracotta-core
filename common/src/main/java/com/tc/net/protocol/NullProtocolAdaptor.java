@@ -34,9 +34,8 @@ public class NullProtocolAdaptor implements TCProtocolAdaptor {
   }
 
   @Override
-  public void addReadData(TCConnection source, TCByteBuffer[] data, int length, Queue<TCByteBuffer> recycle) {
+  public void addReadData(TCConnection source, TCByteBuffer[] data, Queue<TCByteBuffer> recycle) {
     logger.warn("Null Protocol Adaptor isn't supposed to receive any data from the network.");
-    return;
   }
 
   @Override

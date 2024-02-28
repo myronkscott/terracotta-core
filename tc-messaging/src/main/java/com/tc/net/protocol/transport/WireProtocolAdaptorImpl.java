@@ -48,10 +48,10 @@ public class WireProtocolAdaptorImpl extends AbstractTCProtocolAdaptor implement
   }
 
   @Override
-  public void addReadData(TCConnection source, TCByteBuffer[] data, int length, Queue<TCByteBuffer> recycle) throws TCProtocolException {
+  public void addReadData(TCConnection source, TCByteBuffer[] data, Queue<TCByteBuffer> recycle) throws TCProtocolException {
     final WireProtocolMessage msg;
     try {
-      msg = (WireProtocolMessage) this.processIncomingData(source, data, length, recycle);
+      msg = (WireProtocolMessage) this.processIncomingData(source, data, recycle);
     } catch (TCProtocolException e) {
       init();
       throw e;

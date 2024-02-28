@@ -21,6 +21,7 @@ package com.tc.net.core;
 import com.tc.bytes.TCByteBuffer;
 import com.tc.bytes.TCDirectByteBufferCache;
 import com.tc.text.PrettyPrintable;
+import java.io.IOException;
 import java.nio.channels.SocketChannel;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -38,6 +39,10 @@ public class CachingClearTextBufferManagerFactory implements BufferManagerFactor
     return new CachingClearTextBufferManager(socketChannel, send, recv, buffers);
   }
 
+  @Override
+  public SocketEndpoint createSocketChannelEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
+    return new ClearTextSocketEndpoint(socketChannel);
+  }
 
   @Override
   public Map<String, ?> getStateMap() {

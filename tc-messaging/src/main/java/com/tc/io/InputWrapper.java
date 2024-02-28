@@ -16,20 +16,24 @@
  *  Terracotta, Inc., a Software AG company
  *
  */
-package com.tc.net.core;
+package com.tc.io;
 
 import java.io.IOException;
-import java.nio.channels.SocketChannel;
+import java.io.InputStream;
 
 /**
- * @author Ludovic Orban
+ *
  */
-public interface BufferManagerFactory {
-
-  BufferManager createBufferManager(SocketChannel socketChannel, boolean client) throws IOException;
+public class InputWrapper extends InputStream {
   
-  default SocketEndpoint createSocketChannelEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
-    return new BufferManagerWrapper(createBufferManager(socketChannel, client));
-  }
+  private final TCByteBufferInput source;
 
+  public InputWrapper(TCByteBufferInput sink) {
+    this.source = sink;
+  }
+  
+  @Override
+  public int read() throws IOException {
+    return source.read();
+  }
 }

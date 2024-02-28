@@ -80,7 +80,11 @@ public class DiagnosticEntityClientService implements EntityClientService<Diagno
               } else if (methodName.equals("set")) {
                 return "setJMX " + args[0] + " " + args[1] + " " + args[2];
               } else if (methodName.equals("invoke")) {
-                return "invokeJMX " + args[0] + " " + args[1] + Stream.of((Object[])args[2]).map(Object::toString).collect(Collectors.joining(" "," ", ""));
+                if (args.length > 2) {
+                  return "invokeJMX " + args[0] + " " + args[1] + Stream.of((Object[])args[2]).map(Object::toString).collect(Collectors.joining(" "," ", ""));
+                } else {
+                  return "invokeJMX " + args[0] + " " + args[1];
+                }
               } else if (methodName.equals("invokeWithArg")) {
                 return "invokeWithArgJMX " + args[0] + " " + args[1] + " " + args[2];
               } else {

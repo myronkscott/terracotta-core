@@ -109,6 +109,14 @@ public class TCReferenceSupport {
       return 0;
     }
   }
+  
+  public static TCReference createDirectReference(TCByteBuffer...tracked) {
+    return createDirectReference(Arrays.asList(tracked));
+  }
+  
+  public static TCReference createDirectReference(Collection<TCByteBuffer> tracked) {
+    return new DirectRef(tracked);
+  }
   /**
    * Helper to wrap byte buffers that don't need recycling or are recycled by other reference counting
    * 
@@ -144,6 +152,30 @@ public class TCReferenceSupport {
     return new Ref(items, TCByteBuffer::asReadOnlyBuffer);
   }
   
+  private static class DirectRef implements TCReference {
+    private final Collection<TCByteBuffer> buffers;
+
+    public DirectRef(Collection<TCByteBuffer> buffers) {
+      this.buffers = buffers;
+    }
+
+    @Override
+    public TCReference duplicate() {
+      return new DirectRef(buffers);
+    }
+
+    @Override
+    public void close() {
+      
+    }
+
+    @Override
+    public Iterator<TCByteBuffer> iterator() {
+      return buffers.iterator();
+    }
+  
+  }
+
   private static class GCRef implements TCReference {
     private final List<TCByteBuffer> buffers;
 

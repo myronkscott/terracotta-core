@@ -44,7 +44,6 @@ import com.tc.net.protocol.transport.NullConnectionPolicy;
 import com.tc.objectserver.core.api.ServerConfigurationContext;
 import com.tc.objectserver.core.impl.ServerConfigurationContextImpl;
 import com.tc.objectserver.impl.TopologyManager;
-import com.tc.objectserver.persistence.ClusterStatePersistor;
 import com.tc.util.State;
 import com.tc.util.concurrent.QueueFactory;
 
@@ -138,6 +137,7 @@ public class StateManagerImplTest {
       mgmt[i] = mock(ManagementTopologyEventCollector.class);
       ServerPersistentState clusterStatePersistorMock = mock(ServerPersistentState.class);
       when(clusterStatePersistorMock.isDBClean()).thenReturn(Boolean.TRUE);
+      when(clusterStatePersistorMock.getInitialMode()).thenReturn(ServerMode.INITIAL);
 //      tcServers[i] = mock(TCServer.class);
       stageManagers[i] = new StageManagerImpl(new ThreadGroup("test"), new QueueFactory());
       groupManagers[i] = new TCGroupManagerImpl(new NullConnectionPolicy(), LOCALHOST, ports.get(i).port(), groupPorts.get(i).port(),
@@ -306,6 +306,7 @@ public class StateManagerImplTest {
     StageManager stageManager = mock(StageManager.class);
     WeightGeneratorFactory weightGeneratorFactory = RandomWeightGenerator.createTestingFactory(2);
     ServerPersistentState statePersistor = mock(ServerPersistentState.class);
+    when(statePersistor.getInitialMode()).thenReturn(ServerMode.INITIAL);
     when(statePersistor.isDBClean()).thenReturn(Boolean.TRUE);
 
     ServerID node = mock(ServerID.class);
