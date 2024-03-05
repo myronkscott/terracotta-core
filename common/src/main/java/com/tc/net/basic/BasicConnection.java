@@ -60,6 +60,8 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.tc.net.core.SocketEndpoint;
+import static com.tc.net.core.SocketEndpoint.ResultType.OVERFLOW;
+import static com.tc.net.core.SocketEndpoint.ResultType.UNDERFLOW;
 import com.tc.net.core.TCSocketReader;
 
 /**
@@ -99,14 +101,21 @@ public class BasicConnection implements TCConnection {
           if (this.src != null) {
             boolean interrupted = Thread.interrupted();
             try (TCReference data = message.getEntireMessageData().duplicate()) {
+              long msgSize = data.available();
               ByteBuffer[] target = data.toByteBufferArray();
               try {
                 while (data.hasRemaining()) {
                   switch(this.socket.writeFrom(target)) {
                     case EOF:
+                      throw new EOFException();
                     case OVERFLOW:
-                    case UNDERFLOW:
+                      // unexpected
                       throw new IOException();
+                    case UNDERFLOW:
+                      if (msgSize > 0) {
+                        throw new IOException("underflow");
+                      }
+                      break;
                     case SUCCESS:
                     case ZERO:
                       break;
@@ -368,15 +377,17 @@ public class BasicConnection implements TCConnection {
     readerExec.submit(() -> {
       LOGGER.debug("STARTING {} reader connected:{} established:{}", System.identityHashCode(this), connected, established);
       boolean exiting = false;
-      try (TCSocketReader reader = new TCSocketReader(s->TCByteBufferFactory.getInstance(s), null)) {
+      try (TCSocketReader reader = new TCSocketReader()) {
         while (!isClosed()) {
           LOGGER.debug("STATUS {} exiting:{} connected:{} established:{}", System.identityHashCode(this), exiting, connected, established);
           if (exiting) {
             return;
           }
           try (TCReference ref = reader.readFromSocket(socket, adaptor.getExpectedBytes())) {
-            adaptor.addReadData(this, ref);
-            markReceived();
+            if (ref != null) {
+              adaptor.addReadData(this, ref);
+              markReceived();
+            }
           } catch (EOFException eof) {
             if (!isClosed()) {
               fireEOF();

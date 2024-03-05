@@ -69,20 +69,23 @@ public class TCSocketReaderTest {
   public void testReadFromSocket() throws Exception {
     SocketEndpoint endpoint = mock(SocketEndpoint.class);
     when(endpoint.readTo(any())).then((InvocationOnMock iom) -> {
-      ((ByteBuffer[])iom.getArgument(0))[0].position(32);
+      for (ByteBuffer b : (ByteBuffer[])iom.getArgument(0)) {
+        b.position(b.limit());
+      }
       return SocketEndpoint.ResultType.SUCCESS;
     });
     Consumer<TCByteBuffer> returns = mock(Consumer.class);
     Function<Integer, TCByteBuffer> allocator = TCByteBufferFactory::getInstance;
-    TCSocketReader reader = new TCSocketReader(allocator, returns);
-    try (TCReference ref = reader.readFromSocket(endpoint, 32)) {
-      Assert.assertEquals(ref.available(), 32);
-      verify(endpoint).readTo(any());
-      try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
-        verify(returns, never()).accept(any());
+    try (TCSocketReader reader = new TCSocketReader(allocator, returns)) {
+      try (TCReference ref = reader.readFromSocket(endpoint, 32)) {
+        Assert.assertEquals(ref.available(), 32);
+        verify(endpoint).readTo(any());
+        try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
+          verify(returns, never()).accept(any());
+        }
       }
     }
-    verify(returns).accept(any());
+    verify(returns, times(2)).accept(any());
   }
   /**
    * Test of readFromSocket method, of class TCSocketReader.
@@ -98,15 +101,16 @@ public class TCSocketReaderTest {
     });
     Consumer<TCByteBuffer> returns = mock(Consumer.class);
     Function<Integer, TCByteBuffer> allocator = s->TCByteBufferFactory.getInstance(TCByteBufferFactory.getFixedBufferSize());
-    TCSocketReader reader = new TCSocketReader(allocator, returns);
-    try (TCReference ref = reader.readFromSocket(endpoint, TCByteBufferFactory.getFixedBufferSize() * 2)) {
-      Assert.assertEquals(ref.available(), TCByteBufferFactory.getFixedBufferSize() * 2);
-      verify(endpoint).readTo(any());
-      try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
-        verify(returns, never()).accept(any());
+    try (TCSocketReader reader = new TCSocketReader(allocator, returns)) {
+      try (TCReference ref = reader.readFromSocket(endpoint, TCByteBufferFactory.getFixedBufferSize() * 2)) {
+        Assert.assertEquals(ref.available(), TCByteBufferFactory.getFixedBufferSize() * 2);
+        verify(endpoint).readTo(any());
+        try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
+          verify(returns, never()).accept(any());
+        }
       }
     }
-    verify(returns, times(2)).accept(any());
+    verify(returns, times(3)).accept(any());
   } 
   
   /**
@@ -129,12 +133,13 @@ public class TCSocketReaderTest {
     });
     Consumer<TCByteBuffer> returns = mock(Consumer.class);
     Function<Integer, TCByteBuffer> allocator = s->TCByteBufferFactory.getInstance(TCByteBufferFactory.getFixedBufferSize());
-    TCSocketReader reader = new TCSocketReader(allocator, returns);
-    try (TCReference ref = reader.readFromSocket(endpoint, TCByteBufferFactory.getFixedBufferSize())) {
-      Assert.assertEquals(TCByteBufferFactory.getFixedBufferSize(), ref.available());
-      verify(endpoint, times(2)).readTo(any());
-      try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
-        verify(returns, never()).accept(any());
+    try (TCSocketReader reader = new TCSocketReader(allocator, returns)) {
+      try (TCReference ref = reader.readFromSocket(endpoint, TCByteBufferFactory.getFixedBufferSize())) {
+        Assert.assertEquals(TCByteBufferFactory.getFixedBufferSize(), ref.available());
+        verify(endpoint, times(2)).readTo(any());
+        try (TCReference ref2 = reader.readFromSocket(endpoint, 32)) {
+          verify(returns, never()).accept(any());
+        }
       }
     }
     verify(returns, times(3)).accept(any());

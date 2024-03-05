@@ -201,7 +201,7 @@ import com.tc.l2.state.ConsistencyManagerImpl;
 import com.tc.l2.state.ServerMode;
 import com.tc.net.ClientID;
 import com.tc.net.core.BufferManagerFactory;
-import com.tc.net.core.CachingClearTextBufferManagerFactory;
+import com.tc.net.core.ClearTextBufferManagerFactory;
 import com.tc.net.core.DefaultBufferManagerFactory;
 import com.tc.net.core.TCConnectionManager;
 import com.tc.net.core.TCConnectionManagerImpl;
@@ -325,7 +325,7 @@ public class DistributedObjectServer {
         return consistent.getExternalVoters();
       }
     });
-    DefaultBufferManagerFactory.setBufferManagerFactory(new CachingClearTextBufferManagerFactory());
+    DefaultBufferManagerFactory.setBufferManagerFactory(new ClearTextBufferManagerFactory());
   }
 
   protected final ServerBuilder createServerBuilder(GroupConfiguration groupConfiguration, Logger tcLogger,

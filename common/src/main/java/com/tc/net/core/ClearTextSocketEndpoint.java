@@ -21,6 +21,7 @@ package com.tc.net.core;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
+import java.util.Arrays;
 
 /**
  *
@@ -38,6 +39,7 @@ public class ClearTextSocketEndpoint implements SocketEndpoint {
   public ResultType writeFrom(ByteBuffer[] ref) throws IOException {
     if (!open) return ResultType.EOF;
     long amount = socket.write(ref);
+
     if (amount == 0) {
       return ResultType.ZERO;
     } else if (amount < 0) {

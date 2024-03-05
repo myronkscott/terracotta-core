@@ -44,10 +44,13 @@ import com.tc.net.protocol.tcm.TCActionNetworkMessage;
 import com.tc.net.protocol.transport.WireProtocolHeader;
 import com.tc.net.protocol.transport.WireProtocolMessage;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.nio.channels.GatheringByteChannel;
 import java.nio.channels.SelectableChannel;
 import static junit.framework.TestCase.assertTrue;
 import static org.mockito.Mockito.doAnswer;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
 /**
  *
@@ -105,7 +108,16 @@ public class TCConnectionImplTest {
         BufferManagerFactory bufferManagerFactory = mock(BufferManagerFactory.class);
 
         SocketEndpoint bufferManager = mock(SocketEndpoint.class);
-        when(bufferManager.writeFrom(any())).thenReturn(SocketEndpoint.ResultType.SUCCESS);
+        when(bufferManager.writeFrom(any())).then(new Answer() {
+          @Override
+          public Object answer(InvocationOnMock iom) throws Throwable {
+            ByteBuffer[] bytes = (ByteBuffer[])iom.getArgument(0);
+            for (ByteBuffer b : bytes) {
+              b.position(b.limit());
+            }
+            return SocketEndpoint.ResultType.SUCCESS;
+          }
+        });
 
         when(bufferManagerFactory.createSocketEndpoint(any(SocketChannel.class), anyBoolean())).thenAnswer(
             invocationOnMock -> {
@@ -128,7 +140,8 @@ public class TCConnectionImplTest {
         conn.putMessage(msg);
 
         new Thread(() -> sleepThenClose(conn)).start();
-        int w = conn.doWrite();
+        Thread.sleep(4000);
+        long w = conn.doWrite();
 
         Assert.assertEquals(0, w);
       }

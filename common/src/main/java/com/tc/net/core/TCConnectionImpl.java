@@ -19,7 +19,6 @@
 package com.tc.net.core;
 
 import com.tc.bytes.TCByteBuffer;
-import com.tc.bytes.TCByteBufferFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -172,8 +171,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     this.socketParams = socketParams;
     this.commWorker = nioServiceThread;
     this.buffers = new TCDirectByteBufferCache(parent.getBufferCache());
-    this.readAllocator = MESSAGE_PACKUP ? new TCSocketReader(s->TCByteBufferFactory.getDirectByteBuffer(), buffers::add) :
-           new TCSocketReader(s->TCByteBufferFactory.getInstance(s), null);
+    this.readAllocator = MESSAGE_PACKUP ? new TCSocketReader(buffers) : new TCSocketReader();
   }
   
   @Override
@@ -211,9 +209,6 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     Assert.assertTrue(this.closed.isSet());
     this.transportEstablished.set(false);
     try {
-      if (this.readAllocator != null) {
-        this.readAllocator.close();
-      }
       if (this.socket != null) {
         this.socket.close();
       }
@@ -229,6 +224,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
         try {
           callback.run();
           cleanupUnsentWriteMessages();
+          readAllocator.close();
           complete.complete(null);
         } catch (Exception e) {
           complete.completeExceptionally(e);
@@ -310,7 +306,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   }
 
   @Override
-  public int doRead() throws IOException {
+  public long doRead() throws IOException {
     synchronized (readerLock) {
       return doReadInternal();
     }
@@ -335,14 +331,14 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   }
 
   @Override
-  public int doWrite() throws IOException {
+  public long doWrite() throws IOException {
     synchronized (writerLock) {
       return doWriteInternal();
     }
   }
 
-  private int doWriteInternal() throws IOException {
-    int written;
+  private long doWriteInternal() throws IOException {
+    long written;
     try {
       written = doPackageAndWrite();
     } catch (IOException ioe) {
@@ -438,9 +434,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   private int doReadAndPackage() throws IOException { 
     long size = 0;
     try (TCReference ref = readAllocator.readFromSocket(socket, this.protocolAdaptor.getExpectedBytes())) {
-      if (ref == null) {
-        this.commWorker.removeReadInterest(this, channel);
-      } else {
+      if (ref != null) {
         size += ref.available();
         addNetworkData(ref);
       }
@@ -448,15 +442,15 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     return Math.toIntExact(size);
   }
   
-  private int doPackageAndWrite() throws IOException {
+  private long doPackageAndWrite() throws IOException {
     final boolean debug = logger.isDebugEnabled();
-    int totalBytesWritten = 0;
+    long totalBytesWritten = 0;
     
-    WriteContext context = this.writeContexts.peek();
+    WriteContext context = this.writeContexts.poll();
     
     if (context == null) {
       if (buildWriteContextsFromMessages(true)) {
-        context = this.writeContexts.peek();
+        context = this.writeContexts.poll();
       }
     }
 
@@ -468,19 +462,12 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
       }
       totalBytesWritten += bytesWritten;
 
-      if (context.done()) {
-        if (debug) {
-          logger.debug("Complete message sent on connection " + this.channel.toString());
-        }
-        context.writeComplete();
-        writeContexts.remove();
-        context = writeContexts.peek();
-      } else {
-        if (debug) {
-          logger.debug("Message not yet completely sent on connection " + this.channel.toString());
-        }
-        break;
+      Assert.assertTrue(context.done());
+      if (debug) {
+        logger.debug("Complete message sent on connection " + this.channel.toString());
       }
+      context.writeComplete();
+      context = writeContexts.poll();
     }
     
     if (!this.closed.isSet() && context == null && !buildWriteContextsFromMessages(false)) {
@@ -844,15 +831,11 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     }
     
     private TCReference prep() {
-      TCReference msgRef = null;
-      if (msgRef == null) {
-        if (message.prepareToSend()) {
-          msgRef = message.getEntireMessageData().duplicate();
-        } else {
-          msgRef = TCReferenceSupport.createGCReference(Collections.emptyList());
-        }
+      if (message.prepareToSend()) {
+        return message.getEntireMessageData().duplicate();
+      } else {
+        return TCReferenceSupport.createGCReference(Collections.emptyList());
       }
-      return msgRef;
     }
 
     boolean done() {
@@ -874,7 +857,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     long write() throws IOException {
       long written = 0;
       try (TCReference msgRef = prep()) {
-        long msgSize = msgRef.length();
+        long msgSize = msgRef.available();
         ByteBuffer[] compat = msgRef.toByteBufferArray();
         try {
           while (msgRef.hasRemaining()) {
@@ -883,13 +866,21 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
               case ZERO:
                 break;
               case EOF:
+                throw new EOFException();
               case OVERFLOW:
-              case UNDERFLOW:
+                // unexpected
                 throw new IOException();
+              case UNDERFLOW:
+                if (msgSize > 0) {
+                  throw new IOException("underflow");
+                }
+                break;
+                // not sure what to do here.  need to figure out if there is some way to 
+                // send dummy bytes
             }
           }
           sent = true;
-          written = msgRef.length() - msgSize;
+          written = msgSize - msgRef.available();
         } finally {
           msgRef.returnByteBufferArray(compat);
         }

@@ -33,7 +33,7 @@ public class NullProtocolAdaptor implements TCProtocolAdaptor {
 
   @Override
   public int getExpectedBytes() {
-    return 0;
+    return 32;
   }
 
   @Override

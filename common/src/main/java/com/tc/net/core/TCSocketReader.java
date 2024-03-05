@@ -20,6 +20,7 @@ package com.tc.net.core;
 
 import com.tc.bytes.TCByteBuffer;
 import com.tc.bytes.TCByteBufferFactory;
+import com.tc.bytes.TCDirectByteBufferCache;
 import com.tc.bytes.TCReference;
 import com.tc.bytes.TCReferenceSupport;
 import static com.tc.net.core.SocketEndpoint.ResultType.EOF;
@@ -27,6 +28,7 @@ import static com.tc.net.core.SocketEndpoint.ResultType.OVERFLOW;
 import static com.tc.net.core.SocketEndpoint.ResultType.SUCCESS;
 import static com.tc.net.core.SocketEndpoint.ResultType.UNDERFLOW;
 import static com.tc.net.core.SocketEndpoint.ResultType.ZERO;
+import com.tc.util.Assert;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -34,54 +36,91 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- *
+ *  Sits on top of a socket endpoint in order to read messages from the channel 
+ *  and manage memory via references for the rest of the pipeline.  
+ * 
+ *  not synchronized in any way.  Expected to be used by a single thread only including
+ *  close
  */
 public class TCSocketReader implements AutoCloseable {
+  private static final Logger LOGGER = LoggerFactory.getLogger(TCSocketReader.class);
   private final Function<Integer, TCByteBuffer> allocator;
   private final Consumer<TCByteBuffer> returns;
-  private TCByteBuffer raw;
-  private TCReference current;
-  private int readTo = 0;
+  private TCByteBuffer readBuffer;   //  raw buffer to read from the socket
+  private TCReference current;  // complete reference to slice off references to be used by the rest of the system 
+  private int readTo = 0;   // read cursor in the raw buffer
+  
+  public TCSocketReader() {
+    this.allocator = (s)->TCByteBufferFactory.getInstance(s);
+    this.returns = (b)->{};
+  }
 
-  public TCSocketReader(Function<Integer, TCByteBuffer> allocator, Consumer<TCByteBuffer> returns) {
+  public TCSocketReader(TCDirectByteBufferCache cache) {
+    this.allocator = (s)->cache.poll();
+    this.returns = cache::offer;
+  }
+  
+  // for testing
+  TCSocketReader(Function<Integer, TCByteBuffer> allocator, Consumer<TCByteBuffer> returns) {
     this.allocator = allocator;
     this.returns = returns;
   }
   
   public TCReference readFromSocket(SocketEndpoint endpoint, int len) throws IOException {
-    if (raw == null || !raw.hasRemaining()) {
-      raw = allocator.apply(len);
-      replaceCurrent(raw, createCompleteReference(raw), 0);
+    LOGGER.debug("{} requesting:{} {} {}", endpoint, len, readBuffer, readTo);
+    if (readBuffer == null) {
+      TCByteBuffer newBuf = allocator.apply(len);
+      replaceCurrent(newBuf, createCompleteReference(newBuf), 0);
     }
-    if (raw.position() - readTo >= len) {
+    if (readBuffer.position() - readTo >= len) {
     //  bytes are already off the network, return a slice for reading
-      current.stream().findFirst().get().clear().position(readTo).limit(readTo + len);
+      current.stream().findFirst().get().position(readTo).limit(readTo + len);
       TCReference ref = current.duplicate();
       readTo += len;
+      LOGGER.debug("returning from cached bytes:{} {}",ref.available(),readBuffer);
       return ref;
     } else {
       // need to fetch bytes from the network
       LinkedList<TCByteBuffer> newBufs = new LinkedList<>();
-      int capacity = raw.capacity() - readTo;
+      int capacity = readBuffer.limit() - readTo;
       // make sure there is enough capacity
       while (capacity < len) {
         TCByteBuffer next = allocator.apply(len - capacity);
         newBufs.add(next);
-        capacity += next.capacity();
+        capacity += next.limit();
       }
-      // but the current buffer at the head
-      newBufs.addFirst(raw);
-      int received = raw.position() - readTo;
-      // read bytes from the network
+      // add the current buffer at the head
+      newBufs.addFirst(readBuffer);
+      int received = readBuffer.position() - readTo;
+      // read bytes from the network until the requested bytes are in
       while (received < len) {
         try {
           received += doRead(endpoint, newBufs);
         } catch (NoBytesAvailable no) {
-          newBufs.removeFirst();
-          newBufs.forEach(returns::accept);
-          return null;
+      //  no bytes in the channel, peer ay not have written yet, 
+      //  if no bytes are cached, return null here and let the 
+      //  caller call again if needed
+          if (received == 0) {
+            newBufs.removeFirst();
+            if (!newBufs.isEmpty()) {
+              newBufs.forEach(b->returns.accept(b.reInit()));
+            }
+            LOGGER.debug("returning null");
+            return null;
+          } else {
+       // still expecting bytes, might be something wrong here.
+       // go around again after a short pause, maybe should consider
+       // failing at some point
+            try {
+              Thread.sleep(500);
+            } catch (InterruptedException ie) {
+              throw new IOException(ie);
+            }
+          }
         }
       }
       //  create the correct references
@@ -90,12 +129,14 @@ public class TCSocketReader implements AutoCloseable {
       if (newBufs.isEmpty()) {
       // if no new buffers, return a slice of bytes needed
         current.stream().findFirst().get().position(readTo).limit(readTo + len);
+        TCReference ref = current.duplicate();
         readTo += len;
-        return current.duplicate();
+        LOGGER.debug("returning from read socket read with no new buffers: {}", ref.available());
+        return ref;
       } else {
      // created new buffers
-     // make sure the current limit matches the underlying incase a OVERFLOW occurred
-        current.stream().findFirst().get().limit(raw.limit());
+     // make sure the current limit matches the underlying incase an OVERFLOW occurred
+        current.stream().findFirst().get().limit(readBuffer.limit());
      // remove the last buffer, this will be the new current buffer
         TCByteBuffer last = newBufs.removeLast();
      // position the front buffer to the right spot
@@ -108,11 +149,14 @@ public class TCSocketReader implements AutoCloseable {
      // create what will be the new current buffer
         TCReference lastRef = createCompleteReference(last);
      // set the end of the buffer for slicing
-        int lastLim = lastRef.stream().findFirst().get().clear().position(0).limit(len - built).limit();
+        int lastLim = lastRef.stream().findFirst().get().position(0).limit(len - built).limit();
 
         try (TCReference newRefs = TCReferenceSupport.createReference(newBufs, returns)) {
      // piece together all the buffers and return a reference
-          return TCReferenceSupport.createAggregateReference(current, newRefs, lastRef);
+          TCReference retRef = TCReferenceSupport.createAggregateReference(current, newRefs, lastRef);
+          Assert.assertEquals(retRef.available(), len);
+          LOGGER.debug("returning from socket read with new buffers: {}", retRef.available());
+          return retRef;
         } finally {
      // set the last buffer to the current, it may have bytes for the next message
           replaceCurrent(last, lastRef, lastLim);
@@ -122,17 +166,24 @@ public class TCSocketReader implements AutoCloseable {
   }
   
   private void replaceCurrent(TCByteBuffer raw, TCReference ref, int pos) {
+    LOGGER.debug("replacing: {} {} with: {} {}", this.readBuffer, this.readTo, raw, pos);
+    if (raw == this.readBuffer) {
+      Assert.fail();
+    }
+    this.readBuffer = raw;
     if (this.current != null) {
       this.current.close();
     }
-    this.raw = raw;
     this.current = ref;
     this.readTo = pos;
   }
   
   private TCReference createCompleteReference(TCByteBuffer buffer) {
+    LOGGER.debug("creating complete ref: {} {}", buffer, this.readTo);
     int pos = buffer.position();
+    Assert.assertEquals(buffer.limit(), buffer.capacity());
     try {
+      // return a base reference that spans the whole bytebuffer
       return TCReferenceSupport.createReference(returns, buffer.clear());
     } finally {
       buffer.position(pos);
@@ -149,7 +200,7 @@ public class TCSocketReader implements AutoCloseable {
     return dest.stream().map(TCByteBuffer::getNioBuffer).toArray(ByteBuffer[]::new);
   }
   
-  private int doRead(SocketEndpoint endpoint, LinkedList<TCByteBuffer> dest) throws IOException {
+  private int doRead(SocketEndpoint endpoint, List<TCByteBuffer> dest) throws IOException {
     int remain = dest.stream().map(TCByteBuffer::remaining).reduce(Integer::sum).orElse(0);
     ByteBuffer[] nioBytes = extractByteBuffers(dest);
     try {
@@ -158,7 +209,7 @@ public class TCSocketReader implements AutoCloseable {
           throw new EOFException();
         case OVERFLOW:
      // overflow, don't accept any more bytes in the current buffer
-          dest.getLast().limit(dest.getLast().position());
+          dest.forEach(b->b.limit(b.position()));
      // add a buffer to capture bytes
           dest.add(allocator.apply(TCByteBufferFactory.getFixedBufferSize()));
           break;
@@ -174,6 +225,7 @@ public class TCSocketReader implements AutoCloseable {
       remain -= dest.stream().map(TCByteBuffer::remaining).reduce(Integer::sum).orElse(0);
       returnByteBuffers(dest, nioBytes);
     }
+    LOGGER.debug("read from socket: {}", remain);
     return remain;
   }
   

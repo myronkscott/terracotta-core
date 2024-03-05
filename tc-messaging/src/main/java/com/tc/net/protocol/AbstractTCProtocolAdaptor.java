@@ -85,9 +85,10 @@ public abstract class AbstractTCProtocolAdaptor implements TCProtocolAdaptor {
     final int bufferLength = header.getDataBuffer().limit();
     
     Assert.assertEquals(data.available(), bufferLength);
-    // copy header length into header buffer 
+    // copy header length into header buffer
+    TCByteBuffer headerBuf = header.getDataBuffer();
     for (TCByteBuffer b : data) {
-      header.getDataBuffer().position(0).put(b);
+      headerBuf.put(b);
     }
     
     if (!this.header.isHeaderLengthAvail()) { return null; }
@@ -125,7 +126,7 @@ public abstract class AbstractTCProtocolAdaptor implements TCProtocolAdaptor {
         // allow for message types with zero length data payload
         if (0 == dataBytesNeeded) {
           return createMessage(source, this.header, null);
-        } else if (dataBytesNeeded == data.length()) {
+        } else if (dataBytesNeeded < data.available()) {
           data.limit(dataBytesNeeded);
           return processPayloadData(source, data);
         }
