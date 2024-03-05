@@ -18,30 +18,24 @@
  */
 package com.tc.net.core;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
  *
  */
-public interface SocketEndpoint extends AutoCloseable {
+public interface SocketEndpoint extends Closeable {
     
   ResultType writeFrom(ByteBuffer[] ref) throws IOException;
   
   ResultType readTo(ByteBuffer[] ref) throws IOException;
 
-  @Override
-  void close() throws IOException;
-
-  default void dispose() {
-    
-  }
-
   enum ResultType {
-    EOF,
-    ZERO,
-    SUCCESS,
-    UNDERFLOW,
-    OVERFLOW,
+    EOF,  // end of file
+    ZERO, // zero bytes produced or consumed
+    SUCCESS, // some bytes produced or consumed
+    UNDERFLOW, // may occur on writeFrom, provide more data to be consumed
+    OVERFLOW,  // may occur on readTo, provide more capacity to read into
   }
 }

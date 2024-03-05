@@ -19,6 +19,7 @@
 package com.tc.net.core;
 
 import com.tc.bytes.TCByteBuffer;
+import com.tc.bytes.TCByteBufferFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -95,6 +96,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   private final BlockingQueue<TCNetworkMessage> writeMessages = new ArrayBlockingQueue<>(MSG_GROUPING_MAX_COUNT);
   private final TCConnectionManagerImpl parent;
   private final TCDirectByteBufferCache buffers;
+  private final TCSocketReader readAllocator;
   private final TCConnectionEventCaller eventCaller = new TCConnectionEventCaller(logger);
   private final AtomicLong lastDataWriteTime = new AtomicLong(System.currentTimeMillis());
   private final LongAdder messagesWritten = new LongAdder();
@@ -170,6 +172,8 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     this.socketParams = socketParams;
     this.commWorker = nioServiceThread;
     this.buffers = new TCDirectByteBufferCache(parent.getBufferCache());
+    this.readAllocator = MESSAGE_PACKUP ? new TCSocketReader(s->TCByteBufferFactory.getDirectByteBuffer(), buffers::add) :
+           new TCSocketReader(s->TCByteBufferFactory.getInstance(s), null);
   }
   
   @Override
@@ -207,6 +211,9 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     Assert.assertTrue(this.closed.isSet());
     this.transportEstablished.set(false);
     try {
+      if (this.readAllocator != null) {
+        this.readAllocator.close();
+      }
       if (this.socket != null) {
         this.socket.close();
       }
@@ -272,7 +279,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
   }
   
   private void installBufferManager() throws IOException {
-    this.socket = bufferManagerFactory.createSocketChannelEndpoint(channel, clientConnection);
+    this.socket = bufferManagerFactory.createSocketEndpoint(channel, clientConnection);
     if (this.socket == null) {
       throw new IOException("buffer manager not provided");
     }
@@ -428,28 +435,17 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
           && (currentBatchMsgCount + 1 <= WireProtocolHeader.MAX_MESSAGE_COUNT));
   }
 
-  private int doReadAndPackage() throws IOException {
-    final TCByteBuffer[] readBuffers = getReadBuffers();
-   
-    try (TCReference ref = TCReferenceSupport.createDirectReference(readBuffers)) {
-      int size = ref.available();
-      ByteBuffer[] src = ref.toByteBufferArray();
-      try {
-        switch(socket.readTo(src)) {
-          case EOF:
-          throw new EOFException();
-          case OVERFLOW:
-          throw new IOException("IO overflow.  Too many bytes read from channel");
-          case SUCCESS:
-          case ZERO:
-        }
-        size -= ref.available();
-        addNetworkData(readBuffers);
-        return size;
-      } finally {
-        ref.returnByteBufferArray(src);
+  private int doReadAndPackage() throws IOException { 
+    long size = 0;
+    try (TCReference ref = readAllocator.readFromSocket(socket, this.protocolAdaptor.getExpectedBytes())) {
+      if (ref == null) {
+        this.commWorker.removeReadInterest(this, channel);
+      } else {
+        size += ref.available();
+        addNetworkData(ref);
       }
     }
+    return Math.toIntExact(size);
   }
   
   private int doPackageAndWrite() throws IOException {
@@ -572,9 +568,6 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
 
         if (buffers != null) {
           buffers.close();
-        }
-        if (socket != null) {
-          socket.dispose();
         }
       }
     };
@@ -752,11 +745,11 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     }
   }
 
-  private void addNetworkData(TCByteBuffer[] data) {
+  private void addNetworkData(TCReference data) {
     this.lastDataReceiveTime.set(System.currentTimeMillis());
 
     try {
-      this.protocolAdaptor.addReadData(this, data, MESSAGE_PACKUP ? buffers : null);
+      this.protocolAdaptor.addReadData(this, data);
     } catch (final Exception e) {
       logger.error(this.toString() + " " + e.getMessage());
       for (TCByteBuffer tcByteBuffer : data) {
@@ -764,15 +757,6 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
       }
       this.eventCaller.fireErrorEvent(this.eventListeners, this, e, null);
     }
-  }
-
-  protected final TCByteBuffer[] getReadBuffers() {
-    // TODO: Hook in some form of read throttle. To throttle how much data is read from the network,
-    // only return a subset of the buffers that the protocolAdaptor advises to be used.
-
-    // TODO: should also support a way to de-register read interest temporarily
-
-    return this.protocolAdaptor.getReadBuffers();
   }
 
   protected final void fireErrorEvent(Exception e, TCNetworkMessage context) {
@@ -890,6 +874,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
     long write() throws IOException {
       long written = 0;
       try (TCReference msgRef = prep()) {
+        long msgSize = msgRef.length();
         ByteBuffer[] compat = msgRef.toByteBufferArray();
         try {
           while (msgRef.hasRemaining()) {
@@ -904,6 +889,7 @@ final class TCConnectionImpl implements TCConnection, TCChannelReader, TCChannel
             }
           }
           sent = true;
+          written = msgRef.length() - msgSize;
         } finally {
           msgRef.returnByteBufferArray(compat);
         }

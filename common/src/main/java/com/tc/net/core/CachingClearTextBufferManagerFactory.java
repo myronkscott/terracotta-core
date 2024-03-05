@@ -40,7 +40,7 @@ public class CachingClearTextBufferManagerFactory implements BufferManagerFactor
   }
 
   @Override
-  public SocketEndpoint createSocketChannelEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
+  public SocketEndpoint createSocketEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
     return new ClearTextSocketEndpoint(socketChannel);
   }
 

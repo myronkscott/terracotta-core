@@ -18,9 +18,8 @@
  */
 package com.tc.net.basic;
 
+import com.tc.bytes.TCByteBufferFactory;
 import com.tc.bytes.TCReference;
-import com.tc.bytes.TCReferenceSupport;
-import com.tc.net.core.BufferManager;
 import com.tc.net.core.BufferManagerFactory;
 import com.tc.net.core.TCConnection;
 import com.tc.net.core.event.TCConnectionErrorEvent;
@@ -61,6 +60,7 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.tc.net.core.SocketEndpoint;
+import com.tc.net.core.TCSocketReader;
 
 /**
  *
@@ -184,8 +184,8 @@ public class BasicConnection implements TCConnection {
   public Future<Void> asynchClose() {
     try {
       this.closeRunnable.accept(this);
-      shutdownBuffer();
       if (src != null) {
+        close(socket);
         SocketChannel channel = src.getChannel();
         tryOp(channel::shutdownInput);
         tryOp(channel::shutdownOutput);
@@ -216,19 +216,6 @@ public class BasicConnection implements TCConnection {
       LOGGER.debug("failed", t);
     }
   }  
-  
-  private boolean shutdownBuffer() {
-    SocketEndpoint buff = this.socket;
-    if (buff != null) {
-      try {
-        buff.close();
-        return true;
-      } catch (IOException ie) {
-        LOGGER.debug("failed to close buffer", ie);
-      }
-    }
-    return false;
-  }
     
   private Future<Void> shutdownAndAwaitTermination() {
     ExecutorService reader = readerExec;
@@ -301,7 +288,7 @@ public class BasicConnection implements TCConnection {
     // always rebuild the socket address with exerything that comes with it UnkownHostException etc
     SocketChannel channel = SocketChannel.open(new InetSocketAddress(InetAddress.getByName(addr.getHostString()), addr.getPort()));
     src = channel.socket();
-    this.socket = bufferManagerFactory.createSocketChannelEndpoint(channel, true);
+    this.socket = bufferManagerFactory.createSocketEndpoint(channel, true);
     if (this.socket == null) {
       throw new IOException("buffer manager not provided");
     }
@@ -381,44 +368,32 @@ public class BasicConnection implements TCConnection {
     readerExec.submit(() -> {
       LOGGER.debug("STARTING {} reader connected:{} established:{}", System.identityHashCode(this), connected, established);
       boolean exiting = false;
-      while (!isClosed()) {
-        LOGGER.debug("STATUS {} exiting:{} connected:{} established:{}", System.identityHashCode(this), exiting, connected, established);
-        if (exiting) {
-          return;
-        }
-        try (TCReference ref = TCReferenceSupport.createDirectReference(adaptor.getReadBuffers())) {
-          ByteBuffer[] target = ref.toByteBufferArray();
-          try {
-            switch(socket.readTo(target)) {
-              case EOF:
-                throw new EOFException();
-              case OVERFLOW:
-                throw new IOException("IO overflow");
-              case SUCCESS:
-              case ZERO:
-                adaptor.addReadData(this, ref.toArray());
-                break;
+      try (TCSocketReader reader = new TCSocketReader(s->TCByteBufferFactory.getInstance(s), null)) {
+        while (!isClosed()) {
+          LOGGER.debug("STATUS {} exiting:{} connected:{} established:{}", System.identityHashCode(this), exiting, connected, established);
+          if (exiting) {
+            return;
+          }
+          try (TCReference ref = reader.readFromSocket(socket, adaptor.getExpectedBytes())) {
+            adaptor.addReadData(this, ref);
+            markReceived();
+          } catch (EOFException eof) {
+            if (!isClosed()) {
+              fireEOF();
+              close();
             }
-          } finally {
-            ref.returnByteBufferArray(target);
+            exiting = true;
+          } catch (TCProtocolException | IOException ioe) {
+            if (!isClosed()) {
+              fireError(ioe, null);
+              LOGGER.debug("error reading from connection", ioe);
+              close();
+            }
+            exiting = true;
           }
-          markReceived();
-        } catch (EOFException eof) {
-          if (!isClosed()) {
-            fireEOF();
-            close();
+          if (exiting) {
+            LOGGER.debug("anticipate exiting connected:{} established:{}", connected, established);
           }
-          exiting = true;
-        } catch (TCProtocolException | IOException ioe) {
-          if (!isClosed()) {
-            fireError(ioe, null);
-            LOGGER.debug("error reading from connection", ioe);
-            close();
-          }
-          exiting = true;
-        }
-        if (exiting) {
-          LOGGER.debug("anticipate exiting connected:{} established:{}", connected, established);
         }
       }
       LOGGER.debug("EXITED {} connected:{} established:{}", System.identityHashCode(this), connected, established);

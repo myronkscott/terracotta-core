@@ -94,6 +94,20 @@ public class TCReferenceSupport {
     return new TCReferenceSupport(tracked, returns).reference();
   }
   
+  public static TCReference createReference(Consumer<TCByteBuffer> returns, TCByteBuffer...tracked) {
+    if (returns == null) {
+      returns = c->{};
+    }
+    return new TCReferenceSupport(Arrays.asList(tracked), returns).reference();
+  }
+  
+  public static TCReference createDirectReference(Collection<TCByteBuffer> tracked, Consumer<TCByteBuffer> returns) {
+    if (returns == null) {
+      returns = c->{};
+    }
+    return new TCReferenceSupport(tracked, returns).directReference();
+  }
+  
   private void reclaim() {
     Assert.assertTrue(referenceCount.get() == 0);
     for (TCByteBuffer buf : items) {
@@ -108,14 +122,6 @@ public class TCReferenceSupport {
     } else {
       return 0;
     }
-  }
-  
-  public static TCReference createDirectReference(TCByteBuffer...tracked) {
-    return createDirectReference(Arrays.asList(tracked));
-  }
-  
-  public static TCReference createDirectReference(Collection<TCByteBuffer> tracked) {
-    return new DirectRef(tracked);
   }
   /**
    * Helper to wrap byte buffers that don't need recycling or are recycled by other reference counting
@@ -152,30 +158,13 @@ public class TCReferenceSupport {
     return new Ref(items, TCByteBuffer::asReadOnlyBuffer);
   }
   
-  private static class DirectRef implements TCReference {
-    private final Collection<TCByteBuffer> buffers;
-
-    public DirectRef(Collection<TCByteBuffer> buffers) {
-      this.buffers = buffers;
+  private DirectRef directReference() {
+    if (track != null) {
+      COMMITTED_REFERENCES.add(this);
     }
-
-    @Override
-    public TCReference duplicate() {
-      return new DirectRef(buffers);
-    }
-
-    @Override
-    public void close() {
-      
-    }
-
-    @Override
-    public Iterator<TCByteBuffer> iterator() {
-      return buffers.iterator();
-    }
-  
+    return new DirectRef();
   }
-
+  
   private static class GCRef implements TCReference {
     private final List<TCByteBuffer> buffers;
 
@@ -223,10 +212,41 @@ public class TCReferenceSupport {
     }
   }
   
+  private class DirectRef implements TCReference {
+    private final SetOnceFlag closed = new SetOnceFlag();
+    private final Reference<TCReference> tracker = track == null ? null : track.startTracking(this);
+
+    @Override
+    public TCReference duplicate() {
+      return new DirectRef();
+    }
+
+  
+    @Override
+    public void close() {
+      if (closed.attemptSet()) {
+        if (track != null) {
+          track.stopTracking(tracker);
+        }
+        if (referenceCount.decrementAndGet() == 0) {
+          reclaim();
+        }
+      }
+    }
+
+    @Override
+    public Iterator<TCByteBuffer> iterator() {
+      if (closed.isSet()) {
+        throw new IllegalStateException("reference is closed");
+      }
+      return items.iterator();
+    }
+  }
+  
   private class Ref implements TCReference {
     
-    private final List<TCByteBuffer> localItems;
-    private final Reference<Ref> tracker;
+    private final Collection<TCByteBuffer> localItems;
+    private final Reference<TCReference> tracker;
     private final SetOnceFlag closed = new SetOnceFlag();
     
     Ref(Collection<TCByteBuffer> localItems, Function<TCByteBuffer, TCByteBuffer> mapper) {
@@ -264,36 +284,24 @@ public class TCReferenceSupport {
       checkClosed();
       return new Ref(localItems, TCByteBuffer::slice);
     }
-    
-    @Override
-    public Ref duplicate(int length) {
-      checkClosed();
-      int[] counter = {length};
-      return new Ref(localItems, curs->{
-        curs = curs.slice();
-        curs.limit(Math.min(counter[0], curs.capacity()));
-        counter[0] -= curs.remaining();
-        return curs;
-      });
-    }
   }
   
   private class MemoryTracker {
-    private final Map<Reference<? extends Ref>, Exception> outRefs = new ConcurrentHashMap<>();
-    private final ReferenceQueue<Ref> gcRefs = new ReferenceQueue<>();
+    private final Map<Reference<? extends TCReference>, Exception> outRefs = new ConcurrentHashMap<>();
+    private final ReferenceQueue<TCReference> gcRefs = new ReferenceQueue<>();
     
-    private Reference<Ref> startTracking(Ref ref) {
-      Reference<Ref> tracker = new PhantomReference<>(ref, gcRefs);
+    private Reference<TCReference> startTracking(TCReference ref) {
+      Reference<TCReference> tracker = new PhantomReference<>(ref, gcRefs);
       Assert.assertNull(outRefs.put(tracker, new Exception()));
       return tracker;
     }
     
-    private void stopTracking(Reference<Ref> ref) {
+    private void stopTracking(Reference<TCReference> ref) {
       Assert.assertNotNull(outRefs.remove(ref));
     }
 
     private int gc() {
-      Reference<? extends Ref> next = gcRefs.poll();
+      Reference<? extends TCReference> next = gcRefs.poll();
       int count = 0;
       while (next != null) {
         Exception stack = outRefs.remove(next);

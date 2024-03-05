@@ -28,7 +28,7 @@ public interface BufferManagerFactory {
 
   BufferManager createBufferManager(SocketChannel socketChannel, boolean client) throws IOException;
   
-  default SocketEndpoint createSocketChannelEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
+  default SocketEndpoint createSocketEndpoint(SocketChannel socketChannel, boolean client) throws IOException {
     return new BufferManagerWrapper(createBufferManager(socketChannel, client));
   }
 

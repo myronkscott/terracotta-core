@@ -28,6 +28,7 @@ import java.nio.channels.SocketChannel;
 public class ClearTextSocketEndpoint implements SocketEndpoint {
   
   private final SocketChannel socket;
+  private volatile boolean open = true;
 
   public ClearTextSocketEndpoint(SocketChannel socket) {
     this.socket = socket;
@@ -35,6 +36,7 @@ public class ClearTextSocketEndpoint implements SocketEndpoint {
 
   @Override
   public ResultType writeFrom(ByteBuffer[] ref) throws IOException {
+    if (!open) return ResultType.EOF;
     long amount = socket.write(ref);
     if (amount == 0) {
       return ResultType.ZERO;
@@ -47,6 +49,7 @@ public class ClearTextSocketEndpoint implements SocketEndpoint {
 
   @Override
   public ResultType readTo(ByteBuffer[] ref) throws IOException {
+    if (!open) return ResultType.EOF;
     long amount = socket.read(ref);
     if (amount == 0) {
       return ResultType.ZERO;
@@ -59,6 +62,6 @@ public class ClearTextSocketEndpoint implements SocketEndpoint {
 
   @Override
   public void close() throws IOException {
-
+    open = false;
   }
 }
